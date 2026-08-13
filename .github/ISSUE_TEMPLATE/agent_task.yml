@@ -1,0 +1,55 @@
+name: Agent Task
+description: A structured task optimized for AI agent execution (Kiro sub-agent team)
+title: "[Task]: "
+labels: ["status:triage", "needs-agent"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: Single sentence goal. What are we building or fixing?
+      placeholder: Enforce the worktree jail in the tool layer so no write escapes the target repo.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context & Links
+      description: Relevant files, docs, or issues.
+      value: |
+        - Plan of record: `SPEC.md` / graded rubric: `Reqs.md`
+        - Steering: `.kiro/steering/` (product, security, dev-best-practices, agent-team)
+        - Pattern: follow existing module boundaries in `src/self_improving_coding_agent/`
+        - **Architectural change?** Start a [Discussion](https://github.com/bannff/Ditto-Challenge/discussions/new?category=general) first and have meta-architect gate it.
+    validations:
+      required: false
+  - type: dropdown
+    id: complexity
+    attributes:
+      label: Estimated Complexity
+      options:
+        - Small (single file fix)
+        - Medium (feature within one module)
+        - Large (cross-module change)
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria (Definition of Done)
+      description: A checklist of verifiable outcomes.
+      value: |
+        - [ ] Behaves as described
+        - [ ] Tests added/updated and green (`pytest`)
+        - [ ] `ruff check` and `pyright` clean
+        - [ ] No steering violations (SDK-first, no over-engineering, no leaked secrets)
+    validations:
+      required: true
+  - type: textarea
+    id: agent_notes
+    attributes:
+      label: Agent Instructions
+      description: Task-specific constraints or system-prompt overrides.
+      placeholder: "Do not add new dependencies. Stay inside the target worktree. Refuse if the ticket is out of scope."
+    validations:
+      required: false

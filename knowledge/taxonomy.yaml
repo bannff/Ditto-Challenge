@@ -1,0 +1,28 @@
+version: 1
+tags:
+  security:
+    name: security
+    invariants:
+      - never commit secrets or credentials
+      - validate and sanitize all subprocess input
+      - no shell=True in subprocess calls
+    acceptance_hints:
+      - scan the diff for hardcoded keys and tokens
+  bugfix:
+    name: bugfix
+    invariants:
+      - add or update a test that reproduces the bug before fixing it
+    acceptance_hints:
+      - the reproducing test fails before the change and passes after
+  feature:
+    name: feature
+    invariants:
+      - new public behavior is covered by a test
+    acceptance_hints:
+      - the declared acceptance command exits zero
+  refactor:
+    name: refactor
+    invariants:
+      - no change to observable public behavior
+    acceptance_hints:
+      - existing tests pass unchanged

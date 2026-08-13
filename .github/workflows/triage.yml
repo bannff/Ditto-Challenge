@@ -1,0 +1,32 @@
+name: Triage
+on:
+  issues:
+    types: [opened, labeled]
+permissions:
+  issues: write
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Auto-label new issues
+        if: github.event.action == 'opened' && !contains(github.event.issue.labels.*.name, 'needs-triage')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['needs-triage']
+            })
+      - name: Greet Agent
+        if: contains(github.event.issue.labels.*.name, 'agent:kiro') && github.event.action == 'labeled'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: "🤖 **Kiro:** Summoned. Reading the context now. Please make sure the `Context` and `Acceptance Criteria` sections are accurate."
+            })

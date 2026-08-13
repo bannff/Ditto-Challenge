@@ -1,0 +1,39 @@
+name: Bug report
+description: Report a defect or regression
+title: "bug: <short summary>"
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected.
+      placeholder: Steps, expected vs actual...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / error output
+      description: Paste relevant logs (redact secrets).
+      render: shell
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Commit / branch
+      description: The commit SHA or branch where you saw this.
+      placeholder: main @ <sha>
+    validations:
+      required: false

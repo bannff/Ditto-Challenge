@@ -1,0 +1,55 @@
+[project]
+name = "self-improving-coding-agent"
+version = "0.1.0"
+description = "A self-improving coding agent that autonomously resolves tickets against a target repo."
+readme = "README.md"
+authors = [
+    { name = "autodev" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "chromadb>=1.5.9",
+    "faiss-cpu>=1.15.0",
+    "mem0ai>=2.0.18",
+    "opensearch-py>=3.2.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.15.0",
+    "python-dotenv>=1.2.2",
+    "pyyaml>=6.0.3",
+    "strands-agents>=1.52.0",
+    "strands-agents-evals>=1.1.1",
+    "strands-agents-tools>=0.8.6",
+]
+
+[project.scripts]
+self-improving-coding-agent = "self_improving_coding_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.165.5",
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+    "ruff>=0.16.3",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pyright]
+include = ["src", "tests"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

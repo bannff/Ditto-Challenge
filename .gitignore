@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Local run state (vector store, sessions, ledger, chroma)
+.data/
+*.db
+.chroma/
+.mem0/
+.sessions/
+.worktrees/
