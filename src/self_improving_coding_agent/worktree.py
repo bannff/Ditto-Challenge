@@ -92,6 +92,38 @@ _GIT_HARDENING = [
 _DENIED_COMPONENTS = frozenset({".git", ".gitattributes"})
 
 
+def _ignore_lines(text: str) -> frozenset[str]:
+    """The effective rules in a gitignore file's text.
+
+    `rstrip`, not `strip`: gitignore drops trailing whitespace but leading whitespace is part
+    of the pattern, so stripping both makes ` leading.py` and `leading.py` the same rule — and
+    an agent-authored one then reads as trusted because the seed happened to contain the
+    indented form.
+    """
+    return frozenset(
+        line.rstrip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+
+
+def _literal(paths: list[str]) -> list[str]:
+    """Mark paths as literal so git reads them as filenames, not pathspecs.
+
+    `--` is not enough, and this is not a nicety: it ends *option* parsing only, while
+    `:(exclude)`, `:!` and `:(glob)` are pathspec syntax and stay live after it. A file the
+    agent names `:(exclude)helper.py` therefore cancels the positive pathspec beside it, so
+    `add -Af -- :(exclude)helper.py helper.py` stages **nothing** and exits 0 — which put the
+    whole `.gitignore` hole back with one extra write_file call. `:(glob)…` is worse: rc 128,
+    the entire add aborts. Verified against git 2.49.
+
+    Note the asymmetry with `check-ignore`, which refuses every magic prefix including this
+    one — hence `GIT_LITERAL_PATHSPECS` is not the global answer, and `_ignored_by_this_run`
+    partitions `:`-prefixed names out instead.
+    """
+    return [f":(literal){path}" for path in paths]
+
+
 def _fold_component(component: str) -> str:
     """Normalise one path component to the form the filesystem will match on.
 
@@ -476,6 +508,16 @@ class Worktree:
         An absolute path or one climbing out of the tree is not in-tree content — that is
         `<repo>/.git/info/exclude`, which only gate code can write — so it has no seed blob
         and every rule in it is untrusted. Same answer for a file this run created.
+
+        Nothing is trusted from a file whose rules were *removed*, only from one they were
+        added to. Comparing patterns alone caught additions and missed deletions, and deletion
+        is the sharper attack: from the common allow-list shape
+
+            *
+            !*.py
+
+        dropping the `!*.py` line leaves `*` — a pattern that shipped with the target, so
+        trusted — newly hiding every new `.py` file. The agent authored no rule at all.
         """
         path = Path(source)
         if path.is_absolute() or ".." in path.parts:
@@ -483,11 +525,13 @@ class Worktree:
         blob = self._wt_git("cat-file", "blob", f"{self._seed}:{source}")
         if blob.returncode != 0:
             return frozenset()
-        return frozenset(
-            line.strip()
-            for line in blob.stdout.splitlines()
-            if line.strip() and not line.lstrip().startswith("#")
-        )
+        seed = _ignore_lines(blob.stdout)
+        live = self.root / source
+        if live.is_file():
+            with contextlib.suppress(OSError):
+                if not seed <= _ignore_lines(live.read_text(errors="replace")):
+                    return frozenset()
+        return seed
 
     def _ignored_by_this_run(self) -> list[str]:
         """Paths that only *this run's own* ignore rules keep out of the evidence.
@@ -520,43 +564,82 @@ class Worktree:
         candidates = [e[3:] for e in listed.stdout.split("\0") if e.startswith("!! ")]
         if not candidates:
             return []
+        # A path beginning with `:` is pathspec syntax to check-ignore, which refuses *all*
+        # magic — `literal` included — with rc 128 and no output, taking the whole batch's
+        # provenance with it. Such a name can only be a deliberate one, so it is surfaced
+        # unconditionally rather than asked about.
+        askable = [p for p in candidates if not p.startswith(":")]
+        surfaced_early = {p for p in candidates if p.startswith(":")}
+        if not askable:
+            return sorted(surfaced_early)
         verdicts = self._wt_git(
             "check-ignore", "-v", "-z", "--no-index", "--stdin",
-            stdin="\0".join(candidates) + "\0",
+            stdin="\0".join(askable) + "\0",
         )
         fields = verdicts.stdout.split("\0")
         # -z emits four NUL-separated fields per record: source, line number, pattern, path.
         records = [fields[i : i + 4] for i in range(0, len(fields) - 3, 4)]
-        surfaced = {path for path in candidates if path not in {r[3] for r in records}}
+        answered = {r[3] for r in records}
+        surfaced = surfaced_early | {p for p in askable if p not in answered}
         cache: dict[str, frozenset[str]] = {}
         for source, _line, pattern, path in records:
             if pattern not in cache.setdefault(source, self._seed_patterns(source)):
                 surfaced.add(path)
         return sorted(surfaced)
 
-    def _tree_cost(self, extra: list[str]) -> tuple[int, int]:
-        """(files, bytes) this run would add, counting `extra` paths git is ignoring.
+    def _pending_paths(self) -> list[str]:
+        """Paths `status` reports as changed, as in-jail relative paths.
 
-        Directories are expanded here rather than by git because the paths in `extra` are
-        ignored, so no git command will enumerate them for us. Stops early once both ceilings
-        are exceeded: the point is to answer "too big?", not to measure precisely.
+        A rename or copy emits *two* records: the entry, then the old path as a bare field with
+        no status prefix. Slicing three characters off that second field turns `pkg/old.py` into
+        `/old.py`, and `self.root / "/old.py"` is `/old.py` — pathlib discards the base when the
+        right operand is absolute, so the jail silently disappears. Nothing today can drive
+        rename detection (the tool set has no delete or rename), but the containment check is
+        the point: a path derived from command output is input, not a fact.
+        """
+        fields = self._wt_git("status", "--porcelain", "-z").stdout.split("\0")
+        paths: list[str] = []
+        index = 0
+        while index < len(fields):
+            entry = fields[index]
+            index += 1
+            if len(entry) <= 3:
+                continue
+            status, rel = entry[:2], entry[3:]
+            if status[0] in ("R", "C"):
+                index += 1  # skip the bare old-path field this record owns
+            if status[0] == "D":
+                continue
+            if Path(rel).is_absolute() or ".." in Path(rel).parts:
+                continue
+            paths.append(rel)
+        return paths
+
+    def _tree_cost(self, paths: list[str]) -> tuple[int, int]:
+        """(files, bytes) under `paths`, stopping as soon as either ceiling is passed.
+
+        Directories are expanded here rather than by git because the surfaced paths are
+        ignored, so no git command will enumerate them for us. Two limits on that walk:
+
+        - a symlinked directory is counted as one entry and never walked. `is_dir()` follows
+          the link, so without this a single `ln -s /somewhere/big` inside the worktree has
+          `rglob` enumerating names and sizes *outside* the jail — and those then decide
+          whether the run refuses, which hands a target repo a way to force a failure.
+        - the early exit is `or`, matching `_why_not_committable`, which refuses on either
+          ceiling. With `and` the file-count case measured the whole tree (60k files) to
+          reach a verdict it already had, and `commit()` has no timeout.
         """
         files = size = 0
-        pending = [
-            entry[3:]
-            for entry in self._wt_git("status", "--porcelain", "-z").stdout.split("\0")
-            if len(entry) > 3 and not entry.startswith("D ")
-        ]
-        for rel in dict.fromkeys([*pending, *extra]):
+        for rel in dict.fromkeys(paths):
             target = self.root / rel
-            found = target.rglob("*") if target.is_dir() else [target]
-            for item in found:
-                if not item.is_file() or item.is_symlink():
+            walk = target.is_dir() and not target.is_symlink()
+            for item in target.rglob("*") if walk else [target]:
+                if item.is_symlink() or not item.is_file():
                     continue
                 files += 1
                 with contextlib.suppress(OSError):
                     size += item.stat().st_size
-                if files > MAX_HIDDEN_FILES and size > MAX_COMMIT_BYTES:
+                if files > MAX_HIDDEN_FILES or size > MAX_COMMIT_BYTES:
                     return files, size
         return files, size
 
@@ -570,13 +653,21 @@ class Worktree:
         store permanently, so unbounded writes are a durable cost to a repo we don't own.
         Refusing turns both into a stated failure that reverts, which is the outcome the
         product asks for.
+
+        The two ceilings measure different things, and conflating them broke ordinary targets:
+        counting the whole working tree against MAX_HIDDEN_FILES meant a target whose test run
+        drops an un-ignored `htmlcov/` refused a verified one-line fix, under the message
+        "hide 0 path(s)" — a reason that named something that wasn't happening. So the file
+        ceiling is measured over the *surfaced* set, whose blast radius it exists to bound,
+        and only the byte ceiling spans the whole change.
         """
-        files, size = self._tree_cost(surfaced)
-        if len(surfaced) > MAX_HIDDEN_FILES or files > MAX_HIDDEN_FILES:
+        hidden_files, _ = self._tree_cost(surfaced)
+        if len(surfaced) > MAX_HIDDEN_FILES or hidden_files > MAX_HIDDEN_FILES:
             return (
                 f"this run's own ignore rules hide {len(surfaced)} path(s) covering "
-                f"{files} files, over the {MAX_HIDDEN_FILES} allowed"
+                f"{hidden_files} files, over the {MAX_HIDDEN_FILES} allowed"
             )
+        _, size = self._tree_cost([*self._pending_paths(), *surfaced])
         if size > MAX_COMMIT_BYTES:
             return f"the change is {size} bytes, over the {MAX_COMMIT_BYTES} allowed"
         return None
@@ -611,7 +702,7 @@ class Worktree:
         self._wt_git("add", "-N", "--", ".")
         surfaced = self._ignored_by_this_run()
         if surfaced and self._why_not_committable(surfaced) is None:
-            self._wt_git("add", "-Nf", "--", *surfaced)
+            self._wt_git("add", "-Nf", "--", *_literal(surfaced))
         return self._wt_git("diff", "--text", "--no-textconv", self._seed, "--").stdout
 
     def head_hash(self) -> str | None:
@@ -626,7 +717,15 @@ class Worktree:
         Returns False when there was nothing to commit *or* when the tree must not ship as it
         stands (see `_why_not_committable`). Callers have to treat False as "nothing shipped"
         rather than ignoring it, or the run reports a branch with no change on it.
+
+        `last_commit_refusal` is cleared on entry and set on every False that has a reason.
+        Both halves matter: without the clear, a refusal from an earlier `checkpoint()` was
+        still readable after a later, unrelated call, so a run that tidied up got a FAILURE
+        citing a ceiling it no longer exceeded; and a `commit()` that failed for its own
+        reasons used to return False silently, which the caller could only report as "the run
+        made no change".
         """
+        self.last_commit_refusal = None
         if self.is_clean():
             return False
         surfaced = self._ignored_by_this_run()
@@ -637,11 +736,17 @@ class Worktree:
         # A failed `add` must not fall through to a commit that ships a partial change: an
         # embedded git repo in the tree, for instance, makes `add -A` fatal (verified).
         if self._wt_git("add", "-A").returncode != 0:
+            self.last_commit_refusal = "the change could not be staged"
             return False
-        # `-f` because these are exactly the paths `add -A` just declined to stage.
-        if surfaced and self._wt_git("add", "-Af", "--", *surfaced).returncode != 0:
+        # `-f` because these are exactly the paths `add -A` just declined to stage, and
+        # `:(literal)` because one of them may be *named* like a pathspec.
+        if surfaced and self._wt_git("add", "-Af", "--", *_literal(surfaced)).returncode != 0:
+            self.last_commit_refusal = "files this run hid could not be staged"
             return False
-        return self._wt_git("commit", "-m", message).returncode == 0
+        if self._wt_git("commit", "-m", message).returncode != 0:
+            self.last_commit_refusal = "the commit itself failed"
+            return False
+        return True
 
     def revert(self) -> None:
         """Discard everything this run did — back to the commit it started from.

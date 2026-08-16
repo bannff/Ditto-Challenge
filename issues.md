@@ -123,11 +123,39 @@ clean), no unknown-key warning. Verified: the target runs again, cache lands in 
 
 ## 2c. MEDIUM (new) — an agent-written `.gitignore` hides a file from our own evidence
 
-`write_file(".gitignore", "stash.py")` + `write_file("stash.py", …)`: `is_clean()` returns True,
-the file is absent from the diff, it isn't committed, and `clean -fd` leaves it on disk. So a
-"verified" branch can omit a file the gate relied on. Sibling of #6 but from *inside* the jail,
-so `core.excludesFile` doesn't reach it.
-**Fix:** use `status --porcelain --ignored` (or `add -Af`) when deciding cleanliness/evidence.
+~~`write_file(".gitignore", "stash.py")` + `write_file("stash.py", …)`: `is_clean()` returns True,
+the file is absent from the diff, it isn't committed, and `clean -fd` leaves it on disk.~~
+The `clean -fd` half was already stale — `revert()`/`restore()` use `-fdx`. The half that mattered
+was worse than written: the **shipped branch stops reproducing the verdict**. The gate exits 0 in
+the worktree and non-zero on the branch, while the report says SUCCESS and the diff a judge reads
+omits the file responsible.
+
+**Landed** (`ca39695`): trust is per *pattern* and anchored to `self._seed`, the same shape as
+`_gate_config`. `_ignored_by_this_run()` enumerates `!!` candidates with `--ignored=matching`, asks
+`check-ignore -v -z --no-index --stdin` which pattern from which file won, and surfaces anything
+whose winning pattern didn't ship with the target. `is_clean()`, `diff()` (`add -Nf`) and
+`commit()` (`add -Af`) use it; `MAX_HIDDEN_FILES` caps the surfacing blast radius, and
+`MAX_COMMIT_BYTES`/`MAX_WRITE_BYTES` bound what one run packs into a target's object store.
+Rejected: `status --ignored` for cleanliness (incoherent — `is_clean()` goes False on an ordinary
+`.venv/`, `add -A` then stages nothing, and the run ships an empty branch reporting SUCCESS: worse
+than the bug) and a blanket `add -Af` (commits 1500 `.venv` files into the diff a judge reads).
+
+**Follow-ups from security review of the implementation — (a) is a full bypass:**
+
+| # | Finding | Fix |
+|---|---|---|
+| a | **BLOCKER.** `--` ends *option* parsing but **not git pathspec magic**, so a filename like `:(exclude)helper.py` cancels the positive pathspec in `add -Nf/-Af -- <paths>`: nothing is staged, git exits 0, and the original bug is back in full. `:(glob)…` makes the whole `add` fatal (rc 128). One extra `write_file` call restores the vulnerability. | `:(literal)` prefix on every surfaced path at both call sites. **Not** `GIT_LITERAL_PATHSPECS=1` — `check-ignore` rejects all magic *including* `literal`, so it breaks enumeration. A candidate starting with `:` also can't be sent to `check-ignore` (rc 128 kills the batch), so partition those out and treat them as surfaced. |
+| b | **HIGH.** Trust checks *additions* only. Deleting a `!negation` line from a committed `.gitignore` (the common `*` + `!*.py` allow-list shape) makes an untouched seed pattern start hiding new files. | Distrust a source whose live line set is not a superset of its seed set — only appends were ever meant to stay trusted. |
+| c | **HIGH.** `MAX_HIDDEN_FILES` is compared against `_tree_cost`'s count of the *whole* working tree, so an ordinary un-ignored `htmlcov/` (250 files) refuses a verified one-line fix — and blames "hide 0 path(s)". Also fires inside `checkpoint()`, silently losing rollback points. | Count only the surfaced set for the hidden-files ceiling; keep bytes over the whole change. |
+| d | **MEDIUM.** `_tree_cost` leaves the jail two ways: `target.is_dir()` follows a top-level symlink and `rglob` enumerates the outside directory (51 files / 550KB observed), and a rename's old path arrives as a bare `status -z` field that `entry[3:]` shaves into an absolute path (`/old_module.py`), where `self.root / rel` discards the base. | Don't walk a symlinked dir; skip the second field of `R`/`C` entries; containment-check every path before joining. |
+| e | **MEDIUM.** `_tree_cost` early-exits only when **both** ceilings are exceeded while `_why_not_committable` refuses on **either**, so the file-count case walks the whole tree (60k files observed). `commit()` has no timeout, making that the only unbounded thing on the ship path. | `or`, not `and`. Cannot change a decision; bounds the walk at ~201 files. |
+| f | **MEDIUM.** `last_commit_refusal` is never cleared, so a refusal from an earlier `checkpoint()` is reported for a later unrelated `commit()`. `add -A`/`commit -m` failures return False *without* a reason, so a genuine failure is mislabelled "the run made no change". | Clear on entry; set a distinct reason on those paths. |
+| g | **LOW.** `strip()` on seed patterns erases leading whitespace, which gitignore treats as significant (only *trailing* is dropped), so ` leading.py` in the seed makes an agent-authored `leading.py` read as trusted. Plus non-UTF-8 paths round-trip mangled through `text=True, errors="replace"` (fails closed; APFS can't create one). | `rstrip()`; comment the platform assumption. |
+
+Confirmed sound in the same review: the `check-ignore` parse (always 4 NUL fields, fails closed on
+every anomaly), the `--ignored=matching` choice over `traditional`, per-source pattern lookup, the
+`diff()`/`commit()` ordering, `diff <seed>` being unredirectable, and the write ceiling. Switching
+`is_clean()` on costs 0.04s over an 8000-file ignored `.venv`.
 
 ## 2d. LOW (new) — a tool escape crashes instead of refusing
 

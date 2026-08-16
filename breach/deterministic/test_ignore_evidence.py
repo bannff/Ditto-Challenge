@@ -17,6 +17,7 @@ Same harness as the files next door: stubbed graph, real jail, real git, no mode
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -150,6 +151,168 @@ def test_a_checkpoint_commits_the_hidden_file_too(repo, tmp_path: Path):  # noqa
         tree = _git(repo, "ls-tree", "-r", "--name-only", commit)
         assert HIDDEN in tree, "the checkpoint omitted the file the run hid"
         assert ".gitignore" in tree
+    finally:
+        wt.remove()
+
+
+def test_a_file_named_like_a_pathspec_cannot_cancel_its_own_staging(repo, tmp_path: Path):  # noqa: F811
+    """`--` ends *option* parsing, not git *pathspec* magic.
+
+    So a file the agent names `:(exclude)helper.py` is a live exclusion pathspec when the
+    surfaced paths are handed to `add -Af -- <paths>`: it cancels the positive pathspec beside
+    it, git stages nothing and exits 0, and the entire fix above is undone by one extra write.
+    `:(glob)…` is worse — rc 128, the whole add aborts. `:(literal)` on every surfaced path is
+    what makes the argv a list of filenames again.
+    """
+    wt, write_file = _tools(repo, tmp_path, "magic")
+    try:
+        write_file(".gitignore", "*.py\n")  # untrusted rule: hides both files below
+        write_file(HIDDEN, HIDDEN_BODY)
+        write_file(f":(exclude){HIDDEN}", "decoy\n")
+
+        assert HIDDEN in wt.diff(), "an exclusion pathspec removed the file from the evidence"
+        assert wt.commit("ship") is True
+        assert HIDDEN in _git(repo, "ls-tree", "-r", "--name-only", wt.branch)
+    finally:
+        wt.remove()
+
+
+def test_deleting_a_negation_line_does_not_hide_new_files(repo, tmp_path: Path):  # noqa: F811
+    """Trust has to cover removals, not just additions.
+
+    The allow-list shape (`*` then `!*.py`) is common, and dropping the `!*.py` line leaves a
+    pattern that *did* ship with the target now hiding every new `.py` file. The agent authored
+    no rule at all, so a per-pattern check on additions alone sees nothing wrong.
+    """
+    _seed_ignore(repo, "*\n!*.py\n!.gitignore\n")
+    wt, write_file = _tools(repo, tmp_path, "denegate")
+    try:
+        write_file(".gitignore", "*\n!.gitignore\n")  # !*.py removed
+        write_file(HIDDEN, HIDDEN_BODY)
+        assert HIDDEN in wt.diff()
+        assert wt.commit("ship") is True
+        assert HIDDEN in _git(repo, "ls-tree", "-r", "--name-only", wt.branch)
+    finally:
+        wt.remove()
+
+
+def test_ordinary_un_ignored_build_output_does_not_refuse_a_verified_fix(
+    repo,  # noqa: F811
+    tmp_path: Path,
+):
+    """The hidden-files ceiling bounds the *surfaced* set, not the working tree.
+
+    Measured against the whole tree, a target whose test run drops an un-ignored `htmlcov/`
+    refused a verified one-line fix — and said "hide 0 path(s)" while doing it, naming a cause
+    that wasn't happening. It also fired inside `checkpoint()`, silently losing rollback points.
+    """
+    wt, write_file = _tools(repo, tmp_path, "cov")
+    try:
+        write_file("service.py", "# a one-line fix\n")
+        coverage = wt.root / "htmlcov"
+        coverage.mkdir()
+        for i in range(MAX_HIDDEN_FILES + 50):
+            (coverage / f"page{i}.html").write_text("x")
+        assert wt._why_not_committable(wt._ignored_by_this_run()) is None
+        assert wt.commit("ship") is True
+        assert wt.checkpoint("verify") is None  # already committed, nothing left to checkpoint
+    finally:
+        wt.remove()
+
+
+def test_the_cost_walk_stays_inside_the_jail_and_stays_bounded(repo, tmp_path: Path):  # noqa: F811
+    """`is_dir()` follows a symlink, so `rglob` would enumerate a directory outside the jail —
+    and those names and sizes then decide whether the run refuses, handing a target repo a way
+    to force a failure. The walk also has to stop at the first ceiling it passes, since
+    `commit()` has no timeout and this is the only unbounded step on the ship path."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for i in range(40):
+        (outside / f"blob{i}.bin").write_text("y" * 10_000)
+
+    wt, _ = _tools(repo, tmp_path, "escape")
+    try:
+        (wt.root / "link").symlink_to(outside)
+        files, size = wt._tree_cost(["link"])
+        assert (files, size) == (0, 0), "the walk followed a symlink out of the worktree"
+
+        many = wt.root / "many"
+        many.mkdir()
+        for i in range(MAX_HIDDEN_FILES * 5):
+            (many / f"f{i}.txt").write_text("")
+        walked, _ = wt._tree_cost(["many"])
+        assert walked <= MAX_HIDDEN_FILES + 2, "the walk did not stop at the ceiling"
+    finally:
+        wt.remove()
+
+
+def test_a_rename_cannot_smuggle_an_absolute_path_out_of_status(repo, tmp_path: Path):  # noqa: F811
+    """`status -z` emits a rename's old path as a bare field with no status prefix, so shaving
+    three characters off it yields `/old.py` — and `self.root / "/old.py"` is `/old.py`, because
+    pathlib discards the base for an absolute operand. Nothing can drive rename detection today
+    (no delete or rename tool), which is exactly why the guard belongs in now."""
+    wt, write_file = _tools(repo, tmp_path, "rename")
+    try:
+        # The old path has to sit in a subdirectory for this to bite: `"pkg/old.py"[3:]` is
+        # `/old.py`, absolute, while a top-level `"old.py"[3:]` is the harmless `.py`.
+        write_file("pkg/old_module.py", "V = 1\n")
+        assert wt.checkpoint("setup") is not None  # `git mv` needs a tracked file
+        subprocess.run(
+            ["git", "-C", str(wt.root), "mv", "pkg/old_module.py", "pkg/new_module.py"],
+            check=True,
+            capture_output=True,
+        )
+        raw = wt._wt_git("status", "--porcelain", "-z").stdout.split("\0")
+        assert any(f.startswith("R") for f in raw), f"git did not record a rename: {raw}"
+
+        # Two separate guarantees, because there are two independent guards and either alone
+        # would make the weaker assertion pass: the old-path field is not read as an entry at
+        # all, and no path that survives can escape the jail when joined.
+        paths = wt._pending_paths()
+        assert paths == ["pkg/new_module.py"], f"the old path leaked in as an entry: {paths}"
+        assert all(not Path(p).is_absolute() and ".." not in Path(p).parts for p in paths), paths
+        assert all(wt.root in (wt.root / p).parents for p in paths), paths
+    finally:
+        wt.remove()
+
+
+def test_a_refusal_is_not_reported_for_a_later_unrelated_commit(repo, tmp_path: Path):  # noqa: F811
+    """`last_commit_refusal` is read after the fact, so it has to be cleared on entry.
+
+    Otherwise a ceiling tripped by an early `checkpoint()` was still readable once the agent had
+    tidied up, and the run reported FAILURE citing a limit it no longer exceeded.
+    """
+    _seed_ignore(repo, "vendor/\n")
+    wt, write_file = _tools(repo, tmp_path, "stale")
+    try:
+        write_file(".gitignore", "vendor/\n*\n")
+        vendor = wt.root / "vendor"
+        vendor.mkdir(exist_ok=True)
+        for i in range(MAX_HIDDEN_FILES + 20):
+            (vendor / f"f{i}.txt").write_text("x")
+        assert wt.commit("try") is False
+        assert wt.last_commit_refusal is not None
+
+        # Undo everything: the tree is now exactly the seed again.
+        subprocess.run(["git", "-C", str(wt.root), "checkout", "--", "."], capture_output=True)
+        shutil.rmtree(vendor, ignore_errors=True)
+        (wt.root / ".gitignore").write_text("vendor/\n")
+
+        assert wt.commit("try again") is False  # genuinely nothing to commit
+        assert wt.last_commit_refusal is None, "a stale reason outlived the tree that caused it"
+    finally:
+        wt.remove()
+
+
+def test_leading_whitespace_makes_a_different_ignore_rule(repo, tmp_path: Path):  # noqa: F811
+    """gitignore drops *trailing* whitespace only, so ` leading.py` and `leading.py` are two
+    rules. Stripping both ends let an agent-authored rule inherit the seed's trust."""
+    _seed_ignore(repo, " leading.py\n")
+    wt, write_file = _tools(repo, tmp_path, "space")
+    try:
+        write_file(".gitignore", " leading.py\nleading.py\n")
+        write_file("leading.py", "V = 1\n")
+        assert "leading.py" in wt._ignored_by_this_run()
     finally:
         wt.remove()
 
