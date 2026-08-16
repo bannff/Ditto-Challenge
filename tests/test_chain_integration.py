@@ -112,7 +112,7 @@ def test_a_real_agents_tool_call_lands_in_the_chain(tmp_path):
     node = NodeConfig(
         name="implement",
         agents=[AgentSpec(name="builder", system_prompt="do the work", tools=[write_file])],
-        hooks=[recorder],
+        hooks=[recorder.for_node("implement")],
     )
     model = ToolCallingModel()
 
@@ -136,7 +136,7 @@ def test_file_content_never_reaches_the_chain_from_a_live_tool_call(tmp_path):
     node = NodeConfig(
         name="implement",
         agents=[AgentSpec(name="builder", system_prompt="do", tools=[write_file])],
-        hooks=[recorder],
+        hooks=[recorder.for_node("implement")],
     )
 
     build_node_agents(node, {"builder": ToolCallingModel()})[0]("edit it")
@@ -157,7 +157,7 @@ def test_the_recorder_is_registered_on_every_agent_in_a_node(tmp_path):
             AgentSpec(name="reviewer", system_prompt="r", role="reviewer"),
             AgentSpec(name="adversary", system_prompt="a", role="third"),
         ],
-        hooks=[recorder],
+        hooks=[recorder.for_node("implement")],
     )
     model = ToolCallingModel()
 
@@ -255,3 +255,27 @@ def test_a_ledger_that_cannot_be_written_does_not_stop_the_work(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+def test_tool_attribution_is_fixed_per_node_not_shared(tmp_path):
+    """Each node gets its own hook stamped with its own name, so two nodes recording at the
+    same time can't mislabel each other's tool calls. There is no shared 'current node'."""
+    ledger = _ledger(tmp_path)
+    recorder = RunRecorder(ledger, "run-attrib")
+    model = ToolCallingModel()
+
+    for node_name in ("implement", "verify"):
+        node = NodeConfig(
+            name=node_name,
+            agents=[AgentSpec(name="builder", system_prompt="do", tools=[write_file])],
+            hooks=[recorder.for_node(node_name)],
+        )
+        build_node_agents(node, {"builder": ToolCallingModel()})[0]("go")
+
+    attributed = [
+        b.payload["node"]
+        for b in ledger.blocks("run-attrib")
+        if b.block_type == BlockType.TOOL_CALL
+    ]
+    assert attributed == ["implement", "verify"]
+    assert model.calls == 0  # each node used its own model instance

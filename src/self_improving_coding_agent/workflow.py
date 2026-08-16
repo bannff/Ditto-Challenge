@@ -79,7 +79,7 @@ def run_ticket(
             primed_lessons="\n".join(f"- {p}" for p in primed),
         )
         for node in nodes:  # tool calls reach the ledger; the engine stays ledger-unaware
-            node.hooks = [recorder]
+            node.hooks = [recorder.for_node(node.name)]
         task = f"Ticket [{ticket.domain}] {ticket.id}: {ticket.request}"
         wf = run_workflow(
             nodes,
