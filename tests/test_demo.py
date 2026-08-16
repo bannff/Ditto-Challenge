@@ -48,3 +48,28 @@ def test_bytecode_generated_after_seeding_stays_out_of_the_diff(tmp_path):
         check=True,
     )
     assert diff.stdout.strip() == ""
+
+
+def test_ledger_demo_runs_offline_and_shows_every_claim(capsys):
+    """The ledger demo must work with no credentials and no network, because that's the
+    point of an offline audit — and it has to actually demonstrate each claim, not just
+    exit 0."""
+    from demo_ledger import main
+
+    assert main([]) == 0
+    out = capsys.readouterr().out
+
+    assert "chain:      VERIFIED" in out  # act 1: a clean chain verifies
+    assert "CHAIN BROKEN HERE" in out  # act 2: tampering is pinpointed
+    assert "chain is truncated" in out  # act 3: a deleted tail is caught
+    assert "LEARNS" in out and "REFUSED" in out  # act 4: the gate discriminates
+    assert "tamper-EVIDENT, not tamper-proof" in out  # the limits are stated
+
+
+def test_ledger_demo_saves_a_transcript(tmp_path):
+    from demo_ledger import main
+
+    assert main(["--out", str(tmp_path / "bundle")]) == 0
+    transcript = tmp_path / "bundle" / "ledger-demo.log"
+    assert transcript.exists()
+    assert "chain:      VERIFIED" in transcript.read_text()

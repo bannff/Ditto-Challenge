@@ -34,37 +34,44 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0 if report.outcome in _OK_OUTCOMES else 1
 
 
-def _cmd_replay(args: argparse.Namespace) -> int:
+def render_replay(ledger: Ledger, run_id: str, out=None) -> int:
     """Walk a recorded run's chain offline: verify every link, then print the decisions.
 
     No model calls, no network, no repo access — it reads the ledger and recomputes hashes.
     That is the point: a run can be audited from a disconnected machine, and a record that
-    was edited after the fact cannot pass.
+    was edited after the fact cannot pass. Returns the exit code so callers (the CLI, the
+    demo, the artifact writer) all render and judge a chain the same way.
     """
-    ledger = Ledger(get_settings().ledger_db)
-    blocks = ledger.blocks(args.run_id)
+    emit = print if out is None else lambda line="": print(line, file=out)
+    blocks = ledger.blocks(run_id)
     if not blocks:
-        print(f"no chain recorded for run {args.run_id}")
+        emit(f"no chain recorded for run {run_id}")
         return 1
 
-    status = ledger.verify_chain(args.run_id)
-    print(f"replay {args.run_id} — {len(blocks)} blocks\n")
+    status = ledger.verify_chain(run_id)
+    emit(f"replay {run_id} — {len(blocks)} blocks")
+    emit()
     for block in blocks:
         broken = status.broken_at == block.seq
         mark = "!!" if broken else "  "
         git = f" git:{block.git_hash[:8]}" if block.git_hash else ""
-        print(f"{mark} [{block.seq:>3}] {block.block_type:<16}{git}  {block.content_hash[:12]}")
+        emit(f"{mark} [{block.seq:>3}] {block.block_type:<16}{git}  {block.content_hash[:12]}")
         for key, value in block.payload.items():
             if value is not None and value != "":
-                print(f"        {key}: {value}")
+                emit(f"        {key}: {value}")
         if broken:
-            print(f"        ^^ CHAIN BROKEN HERE: {status.reason}")
+            emit(f"        ^^ CHAIN BROKEN HERE: {status.reason}")
 
-    provenance = ledger.provenance(args.run_id)
-    print(f"\nchain:      {'VERIFIED' if status.valid else 'BROKEN — ' + str(status.reason)}")
-    print(f"provenance: {'may teach memory' if provenance.allowed else 'refused'}")
-    print(f"            {provenance.reason}")
+    provenance = ledger.provenance(run_id)
+    emit()
+    emit(f"chain:      {'VERIFIED' if status.valid else 'BROKEN — ' + str(status.reason)}")
+    emit(f"provenance: {'may teach memory' if provenance.allowed else 'refused'}")
+    emit(f"            {provenance.reason}")
     return 0 if status.valid else 1
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    return render_replay(Ledger(get_settings().ledger_db), args.run_id)
 
 
 def _build_parser() -> argparse.ArgumentParser:

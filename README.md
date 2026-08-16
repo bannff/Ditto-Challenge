@@ -57,8 +57,10 @@ uv run python scripts/demo.py --out demos/latest               # also save inspe
 ```
 
 With `--out DIR`, each ticket also drops a bundle at `DIR/<ticket_id>/` — `trace.log` (the
-node trace), `report.json` (the full RunReport), and `diff.patch` (the change it produced) —
-so a judge can inspect a run without executing anything. Every file is scrubbed on the way out.
+node trace), `report.json` (the full RunReport), `diff.patch` (the change it produced), and
+`chain.log` (the verified hash chain of every decision) — so a judge can inspect a run without
+executing anything. Every file is scrubbed on the way out. Committed bundles live in `demos/`;
+see `demos/README.md` for what to read first.
 
 See the self-improvement before/after — the same ticket resolved with empty memory vs
 with a prior lesson primed, where memory supplies a rule that isn't in the code:
@@ -73,6 +75,19 @@ resources, and a "file a ticket" prompt:
 ```bash
 uv run autodev-mcp
 ```
+
+See the hash-chained ledger — tamper detection and the provenance gate that decides whether
+a run is allowed to teach memory. **This one needs no AWS credentials and no network**, so it
+runs anywhere in a couple of seconds:
+
+```bash
+uv run python scripts/demo_ledger.py                    # five acts, offline
+uv run python scripts/demo_ledger.py --out demos/ledger # also save the transcript
+```
+
+It builds real chains through the shipped `Ledger`/`RunRecorder` code, then edits one block
+straight in SQLite and deletes another chain's tail to show both being caught, and finishes by
+gating three runs — resolved, honestly failed, breaker-tripped — through the provenance check.
 
 Audit a finished run offline — verify its hash chain and walk its decisions with no model
 calls, no network, and no repo access:
