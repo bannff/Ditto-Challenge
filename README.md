@@ -74,6 +74,17 @@ resources, and a "file a ticket" prompt:
 uv run autodev-mcp
 ```
 
+Audit a finished run offline — verify its hash chain and walk its decisions with no model
+calls, no network, and no repo access:
+
+```bash
+uv run autodev replay <run_id>
+```
+
+It recomputes every block hash, names the exact block if the chain was altered or truncated,
+and reports whether the run's record was trustworthy enough to teach memory anything. Exits
+nonzero on a broken chain.
+
 A ticket is JSON: `{ "id", "repository", "request", "domain", "acceptance_command" }`.
 `--repo` overrides `repository` so tickets are portable. `examples/tickets/` has samples —
 two bugs, two features, and one the agent should refuse.

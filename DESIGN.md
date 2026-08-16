@@ -15,10 +15,14 @@ ticket ─▶ refusal gate (deterministic, pre-worktree)
    │     ▼           ▼            ▼           ▼                                         │
    │  eval checkpoint after each node ─ pass? advance : self-heal                       │
    │     └─ retry (diagnosis-informed, max_redos) ─▶ circuit breaker (degrade + stop)   │
+   │  every decision above appends a block to the run's hash chain (§9)                │
    └───────────────────────────────────────────────────────────────────────────────────┘
              │
              ▼
    test-gate (target's real exit code) ─ pass → commit + RunReport ; fail → revert, clean tree
+             │
+             ▼
+   provenance gate ─ chain verifies + record complete + not degraded ? store lesson : refuse
 ```
 
 ## 1. Workflow — Strands graph-of-swarms
@@ -75,7 +79,8 @@ worktree after a retry passes instead of false-failing.
 ## 5. Recursive learning — memory that changes later runs [Embeded Vector Store]
 One scrubbed lesson per run (both outcomes), written by code with `infer=False` (verbatim,
 deterministic), gated through Learn alone and **deduped** (skip if similarity ≥ 0.95) for
-junk-resistance. Reads: Discover is primed with recalled lessons before it plans, and Learn
+junk-resistance. A run must also *earn* the right to teach — see the provenance gate in §9.
+Reads: Discover is primed with recalled lessons before it plans, and Learn
 distills from every stage's output plus the per-node verdicts — not just its predecessor's
 summary — so the lesson reflects the whole run. **Proof
 (live, same ticket):** a business rule that exists *only* in a prior-failure lesson — "reorder
@@ -100,6 +105,40 @@ taxonomy, recent run history), and a **prompt** that shapes free text into a val
 an MCP client (or the CLI) drives real ticket resolution while all safety/gate logic stays in the
 workflow.
 
+## 9. Hash-chained ledger — the record controls behavior [tamper-evident, offline]
+The run ledger is not just history; it decides something. Every decision a run makes —
+node attempt, tool call, verdict, breaker trip, acceptance gate, lesson — appends a **block**
+to a per-run hash chain (`content_hash = sha256(payload ‖ prev_hash)`, plus a recorded head
+pinning the chain's length). Chains are **per run**, never global: a single head would
+serialize concurrent tickets. Capture rides seams that already exist — the SDK's
+`AfterToolCallEvent` hook for tool calls, the workflow's status stream for node lifecycle —
+so the engine never learns a ledger exists.
+
+- **Provenance-gated memory writes.** Before a lesson is stored, memory asks the ledger
+  whether the run may teach it anything. Three signals, all required, each covering the
+  others' blind spot: the chain verifies, every attempted block actually landed (an *omitted*
+  block leaves no gap, so the recorder counts its own dropped writes), and the workflow
+  didn't degrade (first-hand, not laundered through the ledger). An honest **failure still
+  teaches** — those are the valuable lessons; only a run whose record can't be trusted is
+  refused, and the refusal is itself a block. This is what keeps a breaker-tripped run's
+  guesswork out of the store where it would steer every later run.
+- **Offline replay.** `autodev replay <run_id>` walks a chain with no model calls, no
+  network, and no repo access: it recomputes every hash, names the exact block where a chain
+  broke, and prints the decision sequence. An audit that works on a disconnected machine.
+  Because replay is the audit surface, control characters are escaped inside the block
+  (before hashing) — untrusted text carrying `CR`/ANSI could otherwise scroll back over the
+  VERIFIED/BROKEN verdict a human is reading.
+- **Rollback references git, it doesn't reimplement it.** Git is already a content-addressed
+  Merkle DAG and works fully offline, so a block carries the worktree's commit hash instead
+  of a copy of the tree: the ledger proves *which* state was verified, `git` restores it.
+- **Honest limits.** This detects modification, mid-chain deletion, and truncation of a
+  *stored* record. It is **not tamper-proof**: blocks are unsigned (no key material here) and
+  the writer is trusted, so evidence forged at the source is chain-valid — see the acceptance
+  gate's `conftest.py` hole. File *content* is recorded as size + digest, never verbatim, so a
+  repo secret matching no scrub pattern can't ride into a durable row. Signing blocks with a
+  per-node key (the mesh-native version) and tier-2 replay that re-executes recorded model
+  I/O are both design-only.
+
 ## Uplevel — production (design only)
 Seams exist; production swaps backends without touching the loop. Theme: **privilege separation
 by process**.
@@ -119,6 +158,11 @@ by process**.
   adapter that upgrades an older record to the current shape before validation, so an in-flight v1
   workflow still loads after a v2 deploy. Stamped now, translation deferred until a v2 exists
   (rather than ship an inert no-op).
+- **Signed blocks + tier-2 replay** — sign each block with a per-node key so the chain is
+  tamper-evident across an untrusted mesh, not just against later edits to our own database;
+  and record model I/O so replay can re-*execute* a run's decisions offline rather than only
+  audit them. Both are seams off §9, deliberately unbuilt: signing needs key management, and
+  full re-execution needs every model call captured.
 - **Observability** — swap the console span exporter for an OTLP collector (one line).
 - **Deploy safety** — a real deploy → verify → rollback stage after the test-gate.
 

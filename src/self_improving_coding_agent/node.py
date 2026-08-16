@@ -59,6 +59,10 @@ class NodeConfig:
     # Extra agent-plane plugins for every agent in this node. Empty in normal operation;
     # the adversarial harness uses it to attach a fault injector (strands_evals chaos).
     extra_plugins: list[Any] = field(default_factory=list)
+    # Agent-plane hook providers (Agent(hooks=...), a different seam from plugins). The
+    # run recorder rides here so tool calls reach the ledger without the engine knowing
+    # a ledger exists.
+    hooks: list[Any] = field(default_factory=list)
 
     # Circuit breaker. execution_timeout bounds one swarm attempt (wall-clock);
     # node_timeout bounds a single agent step within the swarm; max_redos bounds how many

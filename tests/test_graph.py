@@ -1,3 +1,4 @@
+import asyncio
 from unittest.mock import patch
 
 from self_improving_coding_agent import graph
@@ -153,3 +154,29 @@ def test_ping_pong_damper_reaches_the_swarm():
 
     assert captured["repetitive_handoff_detection_window"] == 6
     assert captured["repetitive_handoff_min_unique_agents"] == 2
+
+
+def test_node_abandoned_between_attempts_degrades_instead_of_reporting_success():
+    """The deadline can expire while a node still has retries left. The gate never learns
+    that — it only saw a failed checkpoint — so nothing marked the run degraded and its
+    last unverified attempt became the result. That reported SUCCESS on unverified work."""
+    node = _node(max_redos=3)  # retries remain, so the breaker never trips
+
+    async def slow_failure(node_name, evaluators, **kw):
+        await asyncio.sleep(0.4)  # outlive the deadline below
+        return Verdict(node=node_name, passed=False, attempts=kw["attempts"], diagnosis="nope")
+
+    states = []
+    with patch.object(graph, "run_checkpoint", side_effect=slow_failure):
+        result = run_workflow(
+            [node],
+            "t",
+            models=_models(),
+            status_cb=lambda e: states.append(e["state"]),
+            deadline_seconds=0.2,
+        )
+
+    assert result.degraded is True
+    assert result.outcome == Outcome.FAILURE
+    assert result.verdicts and result.verdicts[0].passed is False  # the failure is recorded
+    assert "failed" in states  # so a breaker-trip block reaches the ledger
