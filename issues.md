@@ -125,7 +125,11 @@ new `{home}`-templated forced arg. Same containment (nothing written in the jail
 clean), no unknown-key warning. Verified: the target runs again, cache lands in HOME, and
 `is_clean()` is still true afterwards.
 
-## 2c. MEDIUM (new) — an agent-written `.gitignore` hides a file from our own evidence
+## ~~2c. MEDIUM — an agent-written `.gitignore` hides a file from our own evidence~~ FIXED
+
+Landed in two passes: the mechanism, then seven holes a security review found in it — including
+a full bypass. All seven are closed; the table below is kept because the bypass is the kind of
+thing that gets reintroduced.
 
 ~~`write_file(".gitignore", "stash.py")` + `write_file("stash.py", …)`: `is_clean()` returns True,
 the file is absent from the diff, it isn't committed, and `clean -fd` leaves it on disk.~~
@@ -144,7 +148,7 @@ Rejected: `status --ignored` for cleanliness (incoherent — `is_clean()` goes F
 `.venv/`, `add -A` then stages nothing, and the run ships an empty branch reporting SUCCESS: worse
 than the bug) and a blanket `add -Af` (commits 1500 `.venv` files into the diff a judge reads).
 
-**Follow-ups from security review of the implementation — (a) is a full bypass:**
+**Follow-ups from security review of the implementation — all FIXED; (a) was a full bypass:**
 
 | # | Finding | Fix |
 |---|---|---|
