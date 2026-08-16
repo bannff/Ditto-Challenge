@@ -1,64 +1,95 @@
 # DESIGN — autodev
 
-`autodev` resolves typed, untrusted tickets without trusting the model to police itself. **Deterministic control** enforces isolation, budgets, test gates, and provenance; **elastic swarm intelligence** handles repository understanding and change work.
+`autodev` is a bounded CLI workflow for resolving typed, untrusted tickets against a target
+repository. The design separates deterministic controls from model judgment: the platform
+owns isolation, tool access, budgets, the acceptance gate, and evidence; bounded Strands
+roles understand the repository and propose the change.
+
+## Review path
+
+The primary path is:
 
 ```text
-                                   autodev workflow
-┌──────────────────────────────────────────────────────────────────────────┐
-│ Ticket ── preflight refusal ───────────────→ Refused RunReport           │
-│             unsafe / vague / invalid gate                                │
-│     │ pass                                                               │
-│     ▼                                                                    │
-│ isolated Git worktree: autodev/<run_id>                                  │
-│     ▼                                                                    │
-│ [ Discover ] → [ Implement ] → [ Verify ] → [ Learn ]                   │
-│       elastic, role-based swarm at every stage                           │
-│          │ eval checkpoint + failure detector                            │
-│          └── diagnosis-informed retry, within a fixed budget             │
-│                                                                          │
-│ layered circuit breakers: handoffs · iterations · node/run timeouts     │
-└──────────────────────────────────────────────────────────────────────────┘
-        │                         │
-        │ red, missing, or        │ green acceptance command
-        │ unrunnable test gate    ▼
-        ▼                    commit branch + RunReport
-   revert; clean tree             │
-        └───────────────┬─────────┘
-                        ▼
-       hash-chained run ledger → provenance gate → trusted lesson memory
-                        └── offline `autodev replay <run_id>`
+Ticket → preflight → isolated worktree → Discover → Implement → Verify → Learn
+                  ↘ refusal                         ↘ acceptance gate → report + bundle
 ```
 
-## 1. Graph for deterministic control; swarm for elastic intelligence
+A judge should establish four outcomes: a resolved bug, a resolved feature, a justified
+refusal, and a before/after self-improvement comparison. For live runs, `scripts/demo.py`
+creates the bug/feature/refusal evidence and `scripts/demo_selfimprove.py` creates the
+control/primed comparison. Neither is asserted as successful until it has been generated
+and its bundles pass offline verification.
 
-The graph owns **Discover → Implement → Verify → Learn**, allowed transitions, and budgets. Each stage uses builder, reviewer, and adversary roles in a bounded Strands swarm. Simple tickets can finish after one role finds sufficient evidence; cross-file or security-sensitive work can draw out role-based challenge and refinement. The deliberation is elastic; the safety path is not.
+## Deterministic control, bounded model work
 
-Every attempt produces a structured verdict. Passing verdicts advance; failing verdicts self-loop with a bounded, diagnosis-informed retry when useful diagnosis is available. Exhausted retries, non-completed swarms, or a missed deadline degrade safely instead of half-applying a change. Explicit limits bound handoffs, iterations, node time, execution time, and total run time.
+Preflight rejects unsafe, invalid, or underspecified tickets before creating a worktree.
+Passing work is confined to an `autodev/<run_id>` Git worktree; file operations are resolved
+through that jail, and the agent has no general shell tool. The ticket's acceptance command
+is untrusted input: it is parsed without a shell, checked against a fail-closed policy, and
+run by the platform with stripped credentials, isolated `HOME`, no user site packages, and
+a bounded process group.
 
-## 2. Safety is enforced in code, not prompts
+Discover, Implement, Verify, and Learn use role-specific, bounded Strands swarms. Each stage
+emits a structured verdict; a useful diagnosis may trigger a bounded retry. Explicit limits
+on handoffs, iterations, node/runtime timeouts, and tokens stop flailing. Exhaustion,
+incomplete work, or a red/unrunnable gate degrades safely: the change is reverted and the
+report explains why. Only a completed workflow with a green acceptance gate retains its
+branch.
 
-Preflight refuses unsafe, underspecified, or invalid tickets before a worktree exists. Passing tickets run only in an `autodev/<run_id>` Git worktree. File tools resolve paths through that jail; there is no general shell tool; Git hooks, fsmonitor, and external protocols are disabled.
+The boundary is worktree confinement plus credential isolation, not an OS filesystem or
+egress sandbox. Production execution would put the same workflow in a no-egress container
+or microVM with scoped credentials.
 
-The ticket’s test command is untrusted input. It is parsed without a shell, checked against a fail-closed policy, and run with stripped credentials, isolated `HOME`, no user site packages, and a bounded process group. The platform—not an agent report—runs the target test gate. Only a green gate, successful workflow, and non-degraded run commits. Every other outcome reverts and reports why.
+## Evidence and offline checks
 
-Today this is credential isolation and worktree confinement, not an OS filesystem or egress sandbox. Production executes untrusted tests in a no-egress container or microVM with scoped credentials.
+A demo run written with `--out` produces an individual canonical, scrubbed bundle containing exactly these six files:
 
-## 3. Learning that earns the right to persist
+- `manifest.json`: expected outcome plus SHA-256 digest and byte count for all artifacts.
+- `trace.log`: lifecycle and evaluator events.
+- `report.json`: structured result, acceptance evidence, verdicts, branch, and lesson.
+- `diff.patch`: the full scrubbed change evidence.
+- `chain.json`: exported hash-chain blocks and recorded head.
+- `chain.log`: readable offline verification of that chain.
 
-Discover retrieves relevant Mem0/FAISS lessons before planning; Learn distills one reusable rule. Writes are scrubbed, deduplicated, and code-controlled—agents can recall memory but cannot write it directly.
+`scripts/verify_demo_artifacts.py <bundle-dir>` needs no model, network, credentials, or
+repository. It enforces the exact six-file canonical set and regular-file/size rules,
+validates strict schemas, checks manifest digests and report/chain agreement, evaluates
+success/refusal invariants, and recomputes the chain. A self-improvement evidence root instead
+contains `contrast.json` and `control/` and `primed/` child bundles; verify it with:
 
-Key lifecycle, tool, test-gate, lesson, and outcome events enter a per-run SQLite SHA-256 hash chain with a recorded head, so modification, mid-chain deletion, and truncation of the stored record are each detectable. Tool arguments record a file's path but only a digest of its content, keeping arbitrary repository text out of a durable row that replay prints. A lesson is stored only if that chain verifies, the recorder observed no dropped writes, and the workflow did not degrade. Honest test failures may teach; breaker-tripped or unverifiable runs cannot poison later planning. `autodev replay <run_id>` verifies and prints the local record offline, with no model calls and no network. This is tamper-evident stored history, not signed provenance, crash recovery, or re-execution.
+```bash
+uv run python scripts/verify_demo_artifacts.py --self-improvement demos/self-improvement
+```
 
-The self-improvement demo proves the read policy matters. In the orders-service IDOR scenario, a test names one vulnerable read path while a sibling summary path remains vulnerable. A control run can satisfy that narrow gate; a run primed with a prior lesson to inspect sibling read paths can secure both. Applying the lesson is model-mediated; writing, retrieving, and gating it are deterministic.
+That offline check verifies both child bundles, the required `control=false`, `primed=true`
+contrast, and each contrast run ID's binding to its child run. For an exported bundle, those
+checks establish only internal consistency: its manifest and recorded chain head are
+self-contained and unsigned. An attacker who can modify the exported directory can replace
+them with the artifacts, so verification provides neither tamper evidence nor post-export
+tamper detection against that attacker, and it does not authenticate origin. `autodev replay
+<run_id>` similarly verifies and renders a local ledger record offline.
 
-## 4. Supporting mechanisms
+The ledger detects edits, sequence/link changes, and tail deletion through its recorded
+head. It is internally tamper-evident, **not authenticated provenance**: blocks are unsigned,
+the writer is trusted, and an attacker able to forge evidence at the source can produce a
+chain-valid bundle. A verified chain also gates learning: altered, incomplete, or
+breaker-tripped runs cannot write lessons; a complete honest failure can.
 
-Pydantic v2 validates tickets, verdicts, reports, and lessons at ingress and egress, avoiding fragile dictionaries. A typed taxonomy provides domain invariants and acceptance hints as data. Nodes receive only job-specific skills, tools, policy lookup, and steering.
+## Learning policy
 
-Memory captures what prior runs learned; the persistent Chroma policy KB provides stable repository-owned guidance. Ruff, Pyright, pytest, and Hypothesis test lint, types, behavior, and generated edge cases. `breach/` adds hostile-ticket, red-team, and chaos tests because a judge’s confidence is not evidence that a boundary held.
+Before planning, Discover retrieves relevant durable lessons. Learn distills at most one
+scrubbed, deduplicated lesson, but agents cannot write memory directly. The self-improvement
+demo measures the read policy rather than merely showing storage: a control run has empty
+memory, while a primed run receives a prior rule absent from the repository. Both must pass
+the target gate; the hidden check distinguishes whether the recalled rule changed the later
+result.
 
-## 5. Production path and deliberate cuts
+## Deliberate cuts and production path
 
-At scale, a coordinator schedules isolated, bounded runs with per-run cost ceilings and retained reports. A promotion path adds deploy → verify → rollback after the repository test gate; sandboxed workers and scoped identities stop bad changes from reaching production or ambient credentials.
-
-I cut deployment infrastructure, containers, auth, UI, crash-resume, signed ledger blocks, and replay re-execution. The working front doors are the CLI and FastMCP server. The investment went into the graded core: an enforceable worktree/tool boundary, independent green-test gate, bounded recovery, demonstrable learning, and an auditable reason for every outcome.
+At production scale, a coordinator would schedule isolated runs with cost ceilings and
+retained reports; a promotion path would add deploy, verify, and rollback after the repository
+gate. The implementation deliberately excludes deployment infrastructure, containers, auth,
+UI, crash-resume, and signed blocks. Optional fixture-only cassette re-execution exists for
+review, not as production crash recovery. Those cuts keep the evaluation focused on the CLI's
+enforceable trust boundary, test gate,
+bounded recovery, evidence, and measurable learning.

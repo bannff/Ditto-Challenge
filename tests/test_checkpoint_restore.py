@@ -334,3 +334,86 @@ def test_a_successful_run_keeps_its_checkpoint_ref(tmp_path):
     wt.remove(keep_branch=True)
 
     assert _refs(repo) == [wt.checkpoint_ref]
+
+
+# ---- shipping a checkpointed change --------------------------------------------
+# The regression checkpoints introduced: once a node checkpoints, the tree is clean, so a
+# bare commit() returns False and a caller reading that as "the agent made no change"
+# discards a verified, gate-passing change and reports the ticket unresolved.
+
+
+def test_a_checkpointed_change_still_ships(tmp_path):
+    _, wt = _worktree(tmp_path)
+    (wt.root / "app.py").write_text("x = 2  # the fix\n")
+    assert wt.checkpoint("implement") is not None
+    assert wt.is_clean()  # the precondition that broke shipping
+    assert wt.commit("would report nothing") is False  # what the caller used to see
+
+    assert wt.finalize("autodev: resolve T-1") is True
+    assert wt.has_committed_change()
+
+
+def test_shipping_collapses_checkpoints_into_one_honest_commit(tmp_path):
+    """Checkpoint messages say the acceptance gate never ran — false once it has. And one
+    commit against the seed is the cleanest diff for a reviewer."""
+    repo, wt = _worktree(tmp_path)
+    (wt.root / "app.py").write_text("step = 1\n")
+    wt.checkpoint("implement")
+    (wt.root / "app.py").write_text("step = 2\n")
+    wt.checkpoint("implement")
+
+    wt.finalize("autodev: resolve T-1")
+
+    log = subprocess.run(
+        ["git", "-C", str(wt.root), "log", "--format=%s"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split("\n")
+    assert log[0] == "autodev: resolve T-1"
+    assert not any("checkpoint" in line for line in log)
+    diff = subprocess.run(
+        ["git", "-C", str(repo), "diff", f"{wt.seed}..{wt.branch}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "step = 2" in diff
+
+
+def test_a_run_that_changed_nothing_still_reports_nothing(tmp_path):
+    # The case the caller's INCONCLUSIVE outcome exists for must keep working.
+    _, wt = _worktree(tmp_path)
+    assert wt.finalize("autodev: resolve T-1") is False
+    assert not wt.has_committed_change()
+
+
+def test_uncommitted_work_after_the_last_checkpoint_still_ships(tmp_path):
+    repo, wt = _worktree(tmp_path)
+    (wt.root / "app.py").write_text("checkpointed = True\n")
+    wt.checkpoint("implement")
+    (wt.root / "extra.py").write_text("added_after_the_checkpoint = True\n")
+
+    assert wt.finalize("autodev: resolve T-1") is True
+
+    diff = subprocess.run(
+        ["git", "-C", str(repo), "diff", f"{wt.seed}..{wt.branch}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "checkpointed = True" in diff
+    assert "added_after_the_checkpoint" in diff
+
+
+def test_shipping_clears_the_checkpoint_ref(tmp_path):
+    # Recovery is for work that did NOT ship; the ref would otherwise dangle at a superseded
+    # tree while the branch carries the real thing.
+    repo, wt = _worktree(tmp_path)
+    (wt.root / "app.py").write_text("x = 2\n")
+    wt.checkpoint("implement")
+    assert _refs(repo) == [wt.checkpoint_ref]
+
+    wt.finalize("autodev: resolve T-1")
+
+    assert _refs(repo) == []

@@ -24,7 +24,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from artifacts import write_run_bundle
+from artifacts import safe_output_name, write_run_bundle
 
 from self_improving_coding_agent.contracts import RunReport, Ticket
 from self_improving_coding_agent.ledger import Ledger
@@ -109,7 +109,7 @@ def run(ticket_path: Path, out_dir: Path | None = None, target: Path = TARGET_AP
         write_run_bundle(
             report=report,
             ledger=ledger,
-            dest=out_dir / ticket.id,
+            dest=out_dir / safe_output_name(report.run_id),
             trace="\n".join(lines) + "\n",
         )
 

@@ -75,6 +75,12 @@ def _refusal_reason(
     return "refused"
 
 
+def _evidence(unshippable: str | None, diff: str) -> str:
+    if unshippable is None:
+        return diff
+    return f"not shipped: {unshippable}\n\n{diff}"
+
+
 def _lesson_content(wf: WorkflowResult) -> str | None:
     """The rule the Learn node produced, or None if it produced nothing usable.
 
@@ -220,10 +226,30 @@ def run_ticket(
         else:
             outcome = Outcome.FAILURE
 
-        diff = worktree.diff()
+        diff = worktree.diff()  # captured before either branch, so the evidence survives both
+        unshippable: str | None = None
         if success and not replaying:
-            worktree.commit(f"autodev: resolve {ticket.id}")
-            keep_branch = True
+            # A commit that didn't happen must not be reported as one. Ignoring this return
+            # value produced the worst report available: SUCCESS, with a branch carrying
+            # nothing (verified — the ticket's own gate exited non-zero when re-run against
+            # it). The two ways it can happen mean different things, so they get different
+            # outcomes:
+            #   * refused — the tree passed its gate but must not ship (this run's own ignore
+            #     rules hide too much, or the change is larger than a target's history should
+            #     absorb). Work was done and rejected: that is a FAILURE.
+            #   * nothing to commit — the gate passed because the target was already green and
+            #     the agent changed nothing. There is no change to resolve, so the ticket is
+            #     unresolved rather than failed: INCONCLUSIVE, the same answer as a run with
+            #     no gate at all.
+            # finalize, not commit: a checkpointed change is already committed, so the tree is
+            # clean and a bare commit() would report "no change" and discard verified work.
+            if worktree.finalize(f"autodev: resolve {ticket.id}"):
+                keep_branch = True
+            else:
+                unshippable = worktree.last_commit_refusal
+                outcome = Outcome.FAILURE if unshippable else Outcome.INCONCLUSIVE
+                unshippable = unshippable or "the run made no change to the target"
+                worktree.revert()
         else:
             worktree.revert()  # a change that isn't verified is never shipped
         recorder.track_git(worktree.head_hash())
@@ -281,7 +307,10 @@ def run_ticket(
             outcome=outcome,
             verdicts=wf.verdicts,
             acceptance=acceptance,
-            evidence=refusal or diff,  # the whole diff; the ledger bounds its own row
+            # The whole diff; the ledger bounds its own row. A tree that passed its gate and
+            # then couldn't ship is the one case where the diff alone misleads — it shows work
+            # that no branch carries — so the reason leads.
+            evidence=refusal or _evidence(unshippable, diff),
             # Only set when memory actually took it: an empty lesson on the report means
             # this run taught nothing, which is the honest reading.
             lesson=lesson if may_learn else None,

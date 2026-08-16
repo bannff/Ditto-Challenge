@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from demo import materialize  # noqa: E402
+from demo_selfimprove import SCENARIOS  # noqa: E402
 
 
 def _tracked(repo: Path) -> list[str]:
@@ -73,3 +74,28 @@ def test_ledger_demo_saves_a_transcript(tmp_path):
     transcript = tmp_path / "bundle" / "ledger-demo.log"
     assert transcript.exists()
     assert "chain:      VERIFIED" in transcript.read_text()
+
+
+def test_inventory_self_improvement_check_never_executes_committed_source(tmp_path, monkeypatch):
+    target = tmp_path / "app"
+    target.mkdir()
+    repo = materialize(tmp_path / "repo", target)
+    sentinel = tmp_path / "executed"
+    monkeypatch.setenv("AUTODEV_TEST_SENTINEL", str(sentinel))
+    (repo / "inventory.py").write_text(
+        "from pathlib import Path\n"
+        "import os\n"
+        "Path(os.environ['AUTODEV_TEST_SENTINEL']).write_text('executed')\n"
+        "class Inventory:\n"
+        "    def needs_reorder(self, threshold):\n"
+        "        return []\n"
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "inventory.py"], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "malicious inventory fixture"], check=True
+    )
+
+    result = SCENARIOS["app1"].check(repo, "HEAD")
+
+    assert result is False
+    assert not sentinel.exists()

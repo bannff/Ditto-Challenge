@@ -42,6 +42,21 @@ CHECKPOINT_REF_PREFIX = "refs/autodev/checkpoints/"
 # reclaimed by git's own gc once nothing points at them.
 CHECKPOINT_REFS_KEPT = 20
 
+# Ceilings on what one run may commit. Both are bounds on a cost we impose on someone else's
+# repository: every checkpoint and every shipped change lands in the *target's* object store
+# and stays there, so "bounded runs" has to mean bounded writes, not just bounded time.
+# MAX_HIDDEN_FILES additionally caps the blast radius of surfacing files a run's own ignore
+# rules hid — an agent that appends `*` to a committed `.gitignore` makes that pattern win for
+# every pre-existing ignored path, so naive surfacing would commit a whole `.venv`.
+# Policy dials, not security parameters: agent-authored files are bounded by tool calls
+# (tens), while a pre-existing ignored tree is thousands, and the gap is what these sit in.
+MAX_HIDDEN_FILES = 200
+MAX_COMMIT_BYTES = 8 * 1024 * 1024
+
+# One `write_file` call. Large enough for any real source file, small enough that a ticket
+# which talks the agent into generating data cannot pack it into the target's history.
+MAX_WRITE_BYTES = 256 * 1024
+
 # A run id becomes a path component and a ref name, so it is validated before it reaches
 # either. Canonical in contracts because the ledger and cassette paths need the same
 # guarantee — two copies of a safety regex is a drift bug waiting to happen.
@@ -189,12 +204,16 @@ def _git(
     git_dir: Path | None = None,
     work_tree: Path | None = None,
     timeout: int = 60,
+    stdin: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run git with the hardening flags, optionally pinned to a known gitdir/work tree.
 
     Pinning is how a repository stops being discovered from inside the jail: with
     --git-dir given, `<root>/.git` is never read, and --work-tree on the command line
     outranks any `core.worktree` in config. Paths are absolute so `-C` cannot re-root them.
+
+    `stdin` feeds commands that take a path list that way (`check-ignore --stdin`). Passing
+    thousands of paths as argv would hit ARG_MAX on a repo with a large ignored tree.
     """
     pinned = [f"--git-dir={git_dir}"] if git_dir else []
     if work_tree:
@@ -207,6 +226,7 @@ def _git(
         timeout=timeout,   # escape a caller that only handles WorktreeError
         check=False,
         env=_safe_env(),
+        input=stdin,
     )
 
 
@@ -258,6 +278,8 @@ class Worktree:
         # A HOME of this run's own, so gate code can't plant a file under HOME that a later
         # run would import (e.g. usercustomize.py). Removed with the worktree.
         self._home = tempfile.mkdtemp(prefix="autodev_run_home_")
+        # Why the last `commit()` declined, so a caller can report it instead of guessing.
+        self.last_commit_refusal: str | None = None
 
     def _read_seed(self) -> str:
         r = self._wt_git("rev-parse", "HEAD")
@@ -273,9 +295,16 @@ class Worktree:
             raise WorktreeError(f"cannot resolve the gitdir for {self.root}: {r.stderr.strip()}")
         return Path(gitdir)
 
-    def _wt_git(self, *args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+    def _wt_git(
+        self, *args: str, timeout: int = 60, stdin: str | None = None
+    ) -> subprocess.CompletedProcess[str]:
         return _git(
-            self.root, *args, git_dir=self._git_dir, work_tree=self.root, timeout=timeout
+            self.root,
+            *args,
+            git_dir=self._git_dir,
+            work_tree=self.root,
+            timeout=timeout,
+            stdin=stdin,
         )
 
     @classmethod
@@ -441,15 +470,130 @@ class Worktree:
         path.write_text(body)
         return path
 
+    def _seed_patterns(self, source: str) -> frozenset[str]:
+        """The ignore rules `source` shipped with at this run's base commit.
+
+        An absolute path or one climbing out of the tree is not in-tree content — that is
+        `<repo>/.git/info/exclude`, which only gate code can write — so it has no seed blob
+        and every rule in it is untrusted. Same answer for a file this run created.
+        """
+        path = Path(source)
+        if path.is_absolute() or ".." in path.parts:
+            return frozenset()
+        blob = self._wt_git("cat-file", "blob", f"{self._seed}:{source}")
+        if blob.returncode != 0:
+            return frozenset()
+        return frozenset(
+            line.strip()
+            for line in blob.stdout.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        )
+
+    def _ignored_by_this_run(self) -> list[str]:
+        """Paths that only *this run's own* ignore rules keep out of the evidence.
+
+        `.gitignore` is legitimately writable — adding a build artifact to it is real work —
+        but git's ignore rules apply to our own bookkeeping, so an agent-authored rule edits
+        what we can see. `write_file(".gitignore", "stash.py")` plus `write_file("stash.py")`
+        made `is_clean()` return True, kept the file out of `diff()`, and kept `add -A` from
+        committing it: the branch we shipped omitted a file the passing test imported, and the
+        ticket's own acceptance command then exited non-zero on that branch while the run
+        reported SUCCESS. The deliverable didn't reproduce the verdict.
+
+        Trust is per *pattern*, not per file, and anchored to `self._seed` like `_gate_config`:
+        a rule stays in force if the line that matched came with the target. That keeps a
+        legitimate append (adding `dist/` to a committed `.gitignore`) from surfacing the
+        `.venv/` the same file already ignored, which is what makes this safe to switch on —
+        for an ordinary target the result is empty and every path below is unchanged.
+
+        Surfacing rather than refusing, because surfacing restores exactly the behaviour the
+        target had before the edit: a path no seed rule hides would already have been in the
+        diff and the commit. Fail-closed in both directions — a `status` we can't read, or a
+        candidate git won't explain, counts as hidden.
+        """
+        listed = self._wt_git("status", "--porcelain", "-z", "--ignored=matching")
+        if listed.returncode != 0:
+            return ["<status unavailable>"]
+        # `matching`, not the default `traditional`: traditional collapses an untracked
+        # directory of ignored files into one `!! sub/` entry, which check-ignore then reports
+        # as *not* ignored, and we would have to re-implement the recursion to find out why.
+        candidates = [e[3:] for e in listed.stdout.split("\0") if e.startswith("!! ")]
+        if not candidates:
+            return []
+        verdicts = self._wt_git(
+            "check-ignore", "-v", "-z", "--no-index", "--stdin",
+            stdin="\0".join(candidates) + "\0",
+        )
+        fields = verdicts.stdout.split("\0")
+        # -z emits four NUL-separated fields per record: source, line number, pattern, path.
+        records = [fields[i : i + 4] for i in range(0, len(fields) - 3, 4)]
+        surfaced = {path for path in candidates if path not in {r[3] for r in records}}
+        cache: dict[str, frozenset[str]] = {}
+        for source, _line, pattern, path in records:
+            if pattern not in cache.setdefault(source, self._seed_patterns(source)):
+                surfaced.add(path)
+        return sorted(surfaced)
+
+    def _tree_cost(self, extra: list[str]) -> tuple[int, int]:
+        """(files, bytes) this run would add, counting `extra` paths git is ignoring.
+
+        Directories are expanded here rather than by git because the paths in `extra` are
+        ignored, so no git command will enumerate them for us. Stops early once both ceilings
+        are exceeded: the point is to answer "too big?", not to measure precisely.
+        """
+        files = size = 0
+        pending = [
+            entry[3:]
+            for entry in self._wt_git("status", "--porcelain", "-z").stdout.split("\0")
+            if len(entry) > 3 and not entry.startswith("D ")
+        ]
+        for rel in dict.fromkeys([*pending, *extra]):
+            target = self.root / rel
+            found = target.rglob("*") if target.is_dir() else [target]
+            for item in found:
+                if not item.is_file() or item.is_symlink():
+                    continue
+                files += 1
+                with contextlib.suppress(OSError):
+                    size += item.stat().st_size
+                if files > MAX_HIDDEN_FILES and size > MAX_COMMIT_BYTES:
+                    return files, size
+        return files, size
+
+    def _why_not_committable(self, surfaced: list[str]) -> str | None:
+        """Why this tree must not be committed as it stands, if so.
+
+        Both ceilings exist because the alternative to refusing is worse than refusing. If an
+        agent appends `*` to a committed `.gitignore`, that pattern wins for every
+        pre-existing ignored path too, so surfacing would commit a whole `.venv` — measured at
+        1500 files and a 315KB diff. And every commit here lands in the *target's* object
+        store permanently, so unbounded writes are a durable cost to a repo we don't own.
+        Refusing turns both into a stated failure that reverts, which is the outcome the
+        product asks for.
+        """
+        files, size = self._tree_cost(surfaced)
+        if len(surfaced) > MAX_HIDDEN_FILES or files > MAX_HIDDEN_FILES:
+            return (
+                f"this run's own ignore rules hide {len(surfaced)} path(s) covering "
+                f"{files} files, over the {MAX_HIDDEN_FILES} allowed"
+            )
+        if size > MAX_COMMIT_BYTES:
+            return f"the change is {size} bytes, over the {MAX_COMMIT_BYTES} allowed"
+        return None
+
     def is_clean(self) -> bool:
         r = self._wt_git("status", "--porcelain")
-        return r.returncode == 0 and r.stdout.strip() == ""
+        if r.returncode != 0 or r.stdout.strip() != "":
+            return False
+        # A file hidden by a rule this run wrote is still a change this run made. Without
+        # this, an agent that ignores its own output leaves a "clean" tree that isn't.
+        return not self._ignored_by_this_run()
 
     def diff(self) -> str:
         """The change this run made, as the reviewer and the ledger see it.
 
-        Two things `git diff HEAD` gets wrong for our purposes, both of which silently
-        shrink the evidence rather than erroring:
+        Four things a plain `git diff HEAD` gets wrong here, all of which silently shrink the
+        evidence rather than erroring:
 
         - Untracked files are invisible to it, so a ticket that adds a new module produced
           an *empty* diff. `add -N` records intent-to-add so new files show up as additions
@@ -457,9 +601,18 @@ class Worktree:
         - A `.gitattributes` marking a path `-diff` (or pointing it at a textconv driver)
           reduces a real change to "Binary files differ". `--text --no-textconv` forces the
           content, so an in-tree attribute can't decide what a reviewer is allowed to read.
+        - `add -N -- .` skips paths git is ignoring, so a rule this run wrote removes a file
+          from the evidence. `add -Nf` on exactly those paths puts them back.
+        - HEAD is the wrong base once anything has been checkpointed: `checkpoint()` commits
+          the agent's work, so after the first passing node `diff HEAD` describes only the
+          *tail* of the run and the report understates what shipped. Anchored to the seed for
+          the same reason `revert()` is — "everything this run did" has one meaning.
         """
         self._wt_git("add", "-N", "--", ".")
-        return self._wt_git("diff", "--text", "--no-textconv", "HEAD", "--").stdout
+        surfaced = self._ignored_by_this_run()
+        if surfaced and self._why_not_committable(surfaced) is None:
+            self._wt_git("add", "-Nf", "--", *surfaced)
+        return self._wt_git("diff", "--text", "--no-textconv", self._seed, "--").stdout
 
     def head_hash(self) -> str | None:
         """The commit this worktree points at. Recorded in ledger blocks so the chain
@@ -468,12 +621,25 @@ class Worktree:
         return (r.stdout.strip() or None) if r.returncode == 0 else None
 
     def commit(self, message: str) -> bool:
-        """Commit all changes to the run branch. Returns False if there was nothing to commit."""
+        """Commit all changes to the run branch, including anything this run tried to hide.
+
+        Returns False when there was nothing to commit *or* when the tree must not ship as it
+        stands (see `_why_not_committable`). Callers have to treat False as "nothing shipped"
+        rather than ignoring it, or the run reports a branch with no change on it.
+        """
         if self.is_clean():
+            return False
+        surfaced = self._ignored_by_this_run()
+        blocked = self._why_not_committable(surfaced)
+        if blocked is not None:
+            self.last_commit_refusal = blocked
             return False
         # A failed `add` must not fall through to a commit that ships a partial change: an
         # embedded git repo in the tree, for instance, makes `add -A` fatal (verified).
         if self._wt_git("add", "-A").returncode != 0:
+            return False
+        # `-f` because these are exactly the paths `add -A` just declined to stage.
+        if surfaced and self._wt_git("add", "-Af", "--", *surfaced).returncode != 0:
             return False
         return self._wt_git("commit", "-m", message).returncode == 0
 
@@ -492,6 +658,38 @@ class Worktree:
         # rejected would stay reachable in the target repo, one command from being restored.
         # Mid-run rollback uses the in-memory checkpoint list, so nothing needs this ref.
         _git(self.repo, "update-ref", "-d", self.checkpoint_ref)
+
+    def has_committed_change(self) -> bool:
+        """True when this run's branch carries a commit beyond the one it started from."""
+        return self.head_hash() != self._seed
+
+    def finalize(self, message: str) -> bool:
+        """Collapse this run's work into one commit and say whether anything shipped.
+
+        A clean tree does not mean nothing happened: once a node checkpoints, the change is
+        already committed, so `commit()` alone returns False and a caller reading that as
+        "the agent made no change" throws away a verified change. This distinguishes the two.
+
+        The squash is deliberate. Checkpoints are scaffolding for the retry loop, not history
+        a reviewer should read, and their messages say the acceptance gate never ran — false
+        once it has. One commit against the seed leaves the branch carrying exactly the
+        change, under one honest message, which is also the cleanest diff to review.
+
+        Returns False only when the run genuinely produced nothing.
+        """
+        if self.is_clean() and not self.has_committed_change():
+            return False
+        if self.has_committed_change():
+            # Un-commit the checkpoints, keeping their content staged, so one commit replaces
+            # them. Every ceiling in commit() then applies to the whole shipped change.
+            self._wt_git("reset", "--soft", self._seed)
+        if not self.commit(message):
+            return False
+        # The change shipped, so there is nothing left to recover: the branch has it, and the
+        # checkpoint ref would otherwise dangle at a superseded tree. Recovery is for work
+        # that did NOT ship.
+        _git(self.repo, "update-ref", "-d", self.checkpoint_ref)
+        return True
 
     def checkpoint(self, node: str) -> str | None:
         """Commit the current tree as a recoverable checkpoint, returning its hash.

@@ -14,6 +14,7 @@ from self_improving_coding_agent.contracts import (
 )
 from self_improving_coding_agent.graph import WorkflowResult
 from self_improving_coding_agent.ledger import Ledger
+from self_improving_coding_agent.settings import get_settings
 
 
 def _init_repo(path: Path) -> Path:
@@ -40,11 +41,22 @@ def _wf_success():
     )
 
 
-def _run(ticket, tmp_path, wf_result):
+def _run(ticket, tmp_path, wf_result, *, edit: bool = True):
     memory = MagicMock()
     memory.retrieve.return_value = []
     ledger = Ledger(tmp_path / "ledger.db")
-    with patch.object(workflow, "run_workflow", return_value=wf_result), patch.object(
+
+    def _fake_workflow(nodes, task, *, session_prefix: str = "run", **_):
+        # A run that shipped something has to have *written* something. Without an edit the
+        # tree is clean, there is nothing to commit, and "SUCCESS with an empty branch" is the
+        # exact misreport run_ticket now refuses to produce — so a fake that skips the write
+        # is asserting a bug rather than a feature.
+        if edit:
+            root = get_settings().worktrees_dir / session_prefix
+            (root / "app.py").write_text("x = 1\n\n\ndef greet():\n    return 'hi'\n")
+        return wf_result
+
+    with patch.object(workflow, "run_workflow", side_effect=_fake_workflow), patch.object(
         workflow, "setup_telemetry"
     ):
         report = workflow.run_ticket(

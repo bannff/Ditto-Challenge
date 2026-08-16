@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import subprocess
 import sys
@@ -27,13 +28,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from artifacts import write_run_bundle
+from artifacts import (
+    ContrastAcceptance,
+    ContrastCheck,
+    ContrastRuns,
+    SelfImprovementContrast,
+    write_run_bundle,
+    write_self_improvement_contrast,
+)
 from demo import TARGET_APP, TARGET_APP_2, materialize  # same scripts/ dir
 
 from self_improving_coding_agent.contracts import Lesson, Outcome, RunReport, Ticket
 from self_improving_coding_agent.ledger import Ledger
 from self_improving_coding_agent.memory import LessonMemory
-from self_improving_coding_agent.scrub import scrub_text
 from self_improving_coding_agent.workflow import run_ticket
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,14 +67,53 @@ class Scenario:
     check: Callable[[Path, str], bool]
 
 
+def _is_discontinued_exclusion(node: ast.expr) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return isinstance(node.operand, ast.Attribute) and node.operand.attr == "discontinued"
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        return False
+    return (
+        isinstance(node.left, ast.Attribute)
+        and node.left.attr == "discontinued"
+        and isinstance(node.ops[0], (ast.Eq, ast.Is))
+        and isinstance(node.comparators[0], ast.Constant)
+        and node.comparators[0].value is False
+    )
+
+
 def _inventory_excludes_discontinued(repo: Path, branch: str) -> bool:
-    code = _committed(repo, branch, "inventory.py")
-    ns: dict = {}
-    exec(compile(code, "inventory.py", "exec"), ns)  # noqa: S102 — our own fixture
-    inv = ns["Inventory"]()
-    inv.add_item("A", "a", 1, 1.0)
-    inv.add_item("D", "d", 1, 1.0, discontinued=True)
-    return "D" not in [i.sku for i in inv.needs_reorder(5)]
+    try:
+        module = ast.parse(_committed(repo, branch, "inventory.py"))
+    except SyntaxError:
+        return False
+    inventory = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "Inventory"
+        ),
+        None,
+    )
+    if inventory is None:
+        return False
+    method = next(
+        (
+            node
+            for node in inventory.body
+            if isinstance(node, ast.FunctionDef) and node.name == "needs_reorder"
+        ),
+        None,
+    )
+    if method is None:
+        return False
+    return any(
+        _is_discontinued_exclusion(predicate)
+        for clause in ast.walk(method)
+        if isinstance(clause, ast.comprehension)
+        for condition in clause.ifs
+        for predicate in ast.walk(condition)
+        if isinstance(predicate, ast.expr)
+    )
 
 
 def _summary_path_also_locked(repo: Path, branch: str) -> bool:
@@ -157,19 +203,20 @@ def _write_contrast(
     control_check: bool | None,
     primed_check: bool | None,
 ) -> None:
-    contrast = {
-        "scenario": scenario.ticket.stem,
-        "primed_rule": scenario.rule,
-        "runs": {"control": control.run_id, "primed": primed.run_id},
-        "acceptance": {"control": _gate_passed(control), "primed": _gate_passed(primed)},
-        "check": {
-            "label": scenario.check_label,
-            "control": control_check,
-            "primed": primed_check,
-        },
-    }
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / "contrast.json").write_text(scrub_text(json.dumps(contrast, indent=2)) + "\n")
+    if control_check is None or primed_check is None:
+        raise ValueError("self-improvement contrast requires both check results")
+    contrast = SelfImprovementContrast(
+        scenario=scenario.ticket.stem,
+        primed_rule=scenario.rule,
+        runs=ContrastRuns(control=control.run_id, primed=primed.run_id),
+        acceptance=ContrastAcceptance(
+            control=_gate_passed(control), primed=_gate_passed(primed)
+        ),
+        check=ContrastCheck(
+            label=scenario.check_label, control=control_check, primed=primed_check
+        ),
+    )
+    write_self_improvement_contrast(contrast=contrast, dest=dest)
 
 
 def main(argv: list[str]) -> int:

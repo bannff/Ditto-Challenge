@@ -1,46 +1,81 @@
-# demos — inspect a run without running anything
+# Demo evidence
 
-Saved output from real and offline runs, committed so the work can be reviewed by reading.
-Every file here is scrubbed on write (`scrub_text` at the artifact boundary).
+Use this directory for generated review artifacts, not as a claim that a live run has
+already succeeded. Generate the four required outcomes, then verify each bundle offline.
 
-## Start here if you have no AWS credentials
+## Generate the evidence
 
-`ledger/ledger-demo.log` — the full transcript of the offline hash-ledger demo. Five acts:
-a resolved run's chain verifying, a tampered block being pinpointed, a deleted tail being
-caught, the provenance gate allowing/refusing three different runs, and a plain statement of
-what the design does *not* claim.
+With Bedrock configuration and AWS credentials available:
 
-Reproduce it in about two seconds, no credentials, no network:
+```bash
+# Bug resolved, feature resolved, and refusal
+uv run python scripts/demo.py --out demos/generated
+
+# Control vs primed-memory self-improvement comparison
+uv run python scripts/demo_selfimprove.py --out demos/self-improvement
+```
+
+The first command materializes the bundled target app into scratch Git repositories and runs
+its selected tickets. The second exits nonzero unless both runs pass their acceptance gates
+and the primed run, unlike the control, passes the memory-only check.
+
+## Verify without running the agent
+
+Each individual generated run directory must contain exactly this canonical bundle:
+
+| File | Purpose |
+|---|---|
+| `manifest.json` | Expected outcome and SHA-256 digests/byte counts for the other five files |
+| `trace.log` | Node lifecycle and evaluation trace |
+| `report.json` | Structured outcome and test-gate evidence |
+| `diff.patch` | Full scrubbed patch evidence |
+| `chain.json` | Exported decision chain and recorded head |
+| `chain.log` | Human-readable chain verification output |
+
+Verify individual bundles as needed:
+
+```bash
+uv run python scripts/verify_demo_artifacts.py demos/generated/bug-1-failing-test
+uv run python scripts/verify_demo_artifacts.py demos/generated/feature-1-acceptance-test
+uv run python scripts/verify_demo_artifacts.py demos/generated/refuse-unsafe
+```
+
+A self-improvement evidence root contains `contrast.json` plus `control/` and `primed/`
+child bundles, rather than a six-file run bundle. Verify the complete comparison with:
+
+```bash
+uv run python scripts/verify_demo_artifacts.py --self-improvement demos/self-improvement
+```
+
+The verifier is offline: it needs no model calls, network access, credentials, or target
+repository. It checks the canonical artifact set, safe file shape and size, strict JSON,
+manifest hashes, outcome consistency, success/refusal evidence rules, and the exported
+hash chain. For a self-improvement root, it verifies both child bundles, the required
+`control=false`, `primed=true` contrast, and binds each contrast run ID to its child run.
+A passing bundle establishes only internal consistency. Its manifest and recorded chain head
+are self-contained and unsigned, so an attacker who can modify the exported directory can
+replace them with the artifacts. It does not provide tamper evidence or post-export tamper
+detection against that attacker, or authenticated origin.
+
+## Optional local ledger demonstration
+
+The ledger demonstration exercises tamper detection and the learning provenance gate without
+Bedrock:
 
 ```bash
 uv run python scripts/demo_ledger.py
 ```
 
-## Bundles from live runs
-
-`latest/<ticket_id>/` holds one directory per ticket resolved against a bundled target app:
-
-| file | what it is |
-|---|---|
-| `trace.log` | the node-lifecycle trace as it happened — each swarm node, its eval score, any redo |
-| `report.json` | the full `RunReport`: outcome, per-node verdicts, the test-gate's real exit code, the lesson |
-| `diff.patch` | the complete change the run produced (unclipped — the ledger caps only its own history row) |
-| `chain.log` | the run's hash chain, verified, as `autodev replay` renders it |
-
-`chain.log` appears in bundles generated after the hash chain landed; older bundles predate it.
-
-Regenerate with credentials:
+It is supporting offline behavior, not a substitute for the four required CLI outcomes.
+For a generated local run, inspect its stored chain with:
 
 ```bash
-uv run python scripts/demo.py --out demos/latest
+uv run autodev replay <run_id>
 ```
 
-## What each demo is meant to show
+## Optional model recording
 
-| command | the claim it demonstrates |
-|---|---|
-| `scripts/demo_ledger.py` | tamper-evident record; provenance gate keeps untrustworthy runs out of memory (offline) |
-| `scripts/demo.py` | the loop end to end — a bug resolved, a feature resolved, a ticket refused |
-| `scripts/demo_selfimprove.py` | memory changing a later run: same ticket, empty memory vs primed |
-| `breach/` | the adversarial harness — hostile tickets provably can't do harm |
-| `autodev replay <run_id>` | audit any recorded run offline, exit nonzero if its record was altered |
+`autodev run --record <cassette-id>` is only for fixture repositories below the configured
+`CASSETTE_FIXTURE_ROOT`. A cassette stores unredacted model prompts, is owner-only, and is
+not part of a review bundle. `autodev reexecute` uses that cassette without model calls,
+still runs the acceptance gate, and never commits or teaches memory.

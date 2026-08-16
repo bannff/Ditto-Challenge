@@ -147,7 +147,9 @@ def _fake_workflow(
         if apply_edit:
             (root / EDIT_NAME.format(run=session_prefix)).write_text("# autodev was here\n")
         for rel, content in (writes or {}).items():
-            (root / rel).write_text(content)
+            target = root / rel
+            target.parent.mkdir(parents=True, exist_ok=True)  # `writes` may name a subdir
+            target.write_text(content)
         return WorkflowResult(
             verdicts=[Verdict(node="implement", passed=outcome == Outcome.SUCCESS)],
             outputs={"learn": final_output},
