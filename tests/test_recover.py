@@ -15,8 +15,8 @@ import pytest
 
 from self_improving_coding_agent.contracts import BlockType
 from self_improving_coding_agent.ledger import Ledger
-from self_improving_coding_agent.recover import plan_recovery
 from self_improving_coding_agent.recorder import RunRecorder
+from self_improving_coding_agent.recover import plan_recovery
 from self_improving_coding_agent.worktree import Worktree, resolve_checkpoint
 
 RUN = "run-rec01"
