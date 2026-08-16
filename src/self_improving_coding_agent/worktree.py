@@ -28,6 +28,7 @@ from .acceptance_policy import (
     normalize,
     resolve,
 )
+from .contracts import RUN_ID_RE
 
 BRANCH_PREFIX = "autodev/"
 
@@ -41,7 +42,9 @@ CHECKPOINT_REF_PREFIX = "refs/autodev/checkpoints/"
 # reclaimed by git's own gc once nothing points at them.
 CHECKPOINT_REFS_KEPT = 20
 
-_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# A run id becomes a path component and a ref name, so it is validated before it reaches
+# either. Canonical in contracts because the ledger and cassette paths need the same
+# guarantee — two copies of a safety regex is a drift bug waiting to happen.
 
 # A commit hash read back from a ledger payload is untrusted text before it reaches git: a
 # value starting with `-` would be parsed as a flag.
@@ -207,6 +210,37 @@ def _git(
     )
 
 
+def is_descendant(repo: Path, ancestor: str, commit: str) -> bool:
+    """True when `commit` is `ancestor` or descends from it. Both must look like hashes."""
+    if not (_COMMIT_RE.match(ancestor) and _COMMIT_RE.match(commit)):
+        return False
+    if ancestor == commit:
+        return True
+    return (
+        _git(repo, "merge-base", "--is-ancestor", ancestor, commit, "--").returncode == 0
+    )
+
+
+def resolve_checkpoint(repo: Path, run_id: str) -> str | None:
+    """The commit a run's checkpoint ref names, or None.
+
+    Module-level rather than a `Worktree` method because recovery happens when there is no
+    worktree and no seed left — the run is over. This is also the *authority* for which
+    commit gets recovered: git's ref store is written by `checkpoint()` and never by the
+    ledger, so a hash read out of an unsigned SQLite row corroborates it but never chooses it.
+    """
+    if not RUN_ID_RE.match(run_id):
+        return None
+    ref = f"{CHECKPOINT_REF_PREFIX}{run_id}"
+    if not ref.startswith(CHECKPOINT_REF_PREFIX):  # belt: a looser regex later can't escape
+        return None
+    r = _git(repo, "rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    commit = r.stdout.strip()
+    if r.returncode != 0 or not _COMMIT_RE.match(commit):
+        return None
+    return commit
+
+
 class Worktree:
     def __init__(self, repo: Path, root: Path, branch: str):
         self.repo = repo
@@ -272,7 +306,7 @@ class Worktree:
 
     @classmethod
     def create(cls, repo: Path | str, run_id: str, base_dir: Path) -> Worktree:
-        if not _RUN_ID_RE.match(run_id):
+        if not RUN_ID_RE.match(run_id):
             raise WorktreeError(f"invalid run_id: {run_id!r}")
         repo = Path(repo).resolve()
         if not (repo / ".git").exists():
@@ -501,14 +535,7 @@ class Worktree:
 
     def _is_ours(self, commit: str) -> bool:
         """True when the commit is this run's seed or descends from it."""
-        if commit == self._seed:
-            return True
-        return (
-            _git(
-                self.repo, "merge-base", "--is-ancestor", self._seed, commit, "--"
-            ).returncode
-            == 0
-        )
+        return is_descendant(self.repo, self._seed, commit)
 
     @property
     def seed(self) -> str:

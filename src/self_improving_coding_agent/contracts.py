@@ -151,6 +151,26 @@ class ProvenanceDecision(BaseModel):
     chain: ChainStatus | None = None
 
 
+class RecoveryDecision(BaseModel):
+    """Whether a run's last checkpointed tree can be recovered, and what it actually is.
+
+    `commit` comes from git's ref, never from the ledger — the chain corroborates it rather
+    than choosing it. `node` and `outcome` exist so a reader can't mistake a recovered tree
+    for verified, shippable work: these commits passed a node's eval checkpoint, and the run
+    they came from may well have failed.
+    """
+
+    run_id: str
+    allowed: bool
+    reason: str
+    commit: str | None = None
+    node: str | None = None
+    outcome: str | None = None
+    chain: ChainStatus | None = None
+    # Whether the ledger's own record of the last checkpoint agrees with git's ref.
+    corroborated: bool = False
+
+
 class TaxonomyTag(BaseModel):
     name: str
     invariants: list[str] = Field(default_factory=list)

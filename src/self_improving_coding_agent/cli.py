@@ -13,6 +13,7 @@ from pathlib import Path
 from .cassette import Cassette, CassetteError
 from .contracts import Outcome, Ticket
 from .ledger import Ledger
+from .recover import plan_recovery
 from .settings import get_settings
 from .workflow import run_ticket
 
@@ -110,6 +111,49 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     return render_replay(Ledger(get_settings().ledger_db), args.run_id)
 
 
+def _cmd_recover(args: argparse.Namespace) -> int:
+    """Report whether a finished run's last checkpointed tree can be recovered.
+
+    Reports rather than materializes: the tree is agent-authored content derived from an
+    untrusted ticket, so putting it on disk for someone means the next `pytest` in that
+    directory runs code the agent wrote. The operator gets the exact command instead.
+    """
+    settings = get_settings()
+    decision = plan_recovery(Ledger(settings.ledger_db), Path(args.repo).resolve(), args.run_id)
+
+    print(f"recover {decision.run_id}")
+    if decision.chain is not None:
+        state = (
+            f"VERIFIED across {decision.chain.length} blocks"
+            if decision.chain.valid
+            else f"BROKEN — {decision.chain.reason}"
+        )
+        print(f"  chain:    {state}")
+    if decision.outcome:
+        print(f"  run ended: {decision.outcome}")
+
+    if not decision.allowed:
+        print(f"\nnot recoverable: {decision.reason}")
+        return 1
+
+    print(f"  commit:   {decision.commit}")
+    print(f"  from node: {decision.node or 'unknown'} — passed its EVAL checkpoint")
+    print(f"  ledger agrees with git's ref: {'yes' if decision.corroborated else 'NO'}")
+    print(f"\n{decision.reason}")
+    # The claim a reader must not mistake. These commits are gated on LLM judges plus swarm
+    # status, never on the target's own tests.
+    print(
+        "\nThis tree is UNVERIFIED: the acceptance gate never ran on it, so it is not "
+        "shippable work.\nIt contains code the agent wrote from an untrusted ticket — running "
+        "its tests executes that code."
+    )
+    print("\nTo inspect it yourself:")
+    print(f"  git -C {args.repo} diff {decision.commit}")
+    print(f"  git -C {args.repo} worktree add --detach /tmp/UNVERIFIED-{decision.run_id} "
+          f"{decision.commit}")
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="autodev")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -139,6 +183,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument("run_id", help="the run to replay, e.g. run-0799fa72cfb5")
     replay.set_defaults(func=_cmd_replay)
+
+    recover = sub.add_parser(
+        "recover",
+        help="report a finished run's last recoverable checkpoint (offline; does not write)",
+    )
+    recover.add_argument("run_id", help="the run to recover, e.g. run-0799fa72cfb5")
+    recover.add_argument("--repo", required=True, help="path to the target repository")
+    recover.set_defaults(func=_cmd_recover)
 
     return parser
 
