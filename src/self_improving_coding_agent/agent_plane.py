@@ -45,12 +45,20 @@ def build_agent(
     )
 
 
+def _model_for(node: NodeConfig, spec: AgentSpec, models: Mapping[str, Model]) -> Model:
+    """The role's shared model, wrapped per agent when the node asks for it."""
+    model = models[spec.role]
+    if node.model_wrapper is None:
+        return model
+    return node.model_wrapper(model, node.name, spec.name)
+
+
 def build_node_agents(node: NodeConfig, models: Mapping[str, Model]) -> list[Agent]:
     """One fresh Agent per AgentSpec, model selected by role, node plugins shared."""
     return [
         build_agent(
             spec,
-            model=models[spec.role],
+            model=_model_for(node, spec, models),
             skill_paths=node.skill_paths,
             steering_prompt=node.steering_prompt,
             shared_tools=node.shared_tools,

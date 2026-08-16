@@ -21,9 +21,11 @@ import hashlib
 from typing import Any
 
 from strands.hooks import AfterToolCallEvent, HookProvider, HookRegistry
+from strands.models.model import Model
 
 from .contracts import BlockType, NodeState
 from .ledger import Ledger
+from .model_record import RecordingModel
 
 # Which node lifecycle state becomes which block. Data, not branches.
 _STATE_BLOCKS = {
@@ -116,6 +118,16 @@ class RunRecorder:
 
     def for_node(self, node: str) -> NodeToolRecorder:
         return NodeToolRecorder(self, node)
+
+    def wrap_model(self, inner: Model, node: str, agent: str) -> Model:
+        """Wrap a model so its calls are hashed into the chain. One wrapper per agent, so
+        the call ordinal is per-agent and survives swarm handoffs."""
+        return RecordingModel(
+            inner,
+            lambda payload: self.append(BlockType.MODEL_CALL, payload),
+            node=node,
+            agent=agent,
+        )
 
     @property
     def intact(self) -> bool:

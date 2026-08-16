@@ -63,6 +63,10 @@ class NodeConfig:
     # run recorder rides here so tool calls reach the ledger without the engine knowing
     # a ledger exists.
     hooks: list[Any] = field(default_factory=list)
+    # Optional (inner_model, node_name, agent_name) -> Model. Wraps each agent's model so its
+    # calls can be recorded; a model request is only visible at the model seam, never from a
+    # hook. None means the model is used as-is.
+    model_wrapper: Any = None
 
     # Circuit breaker. execution_timeout bounds one swarm attempt (wall-clock);
     # node_timeout bounds a single agent step within the swarm; max_redos bounds how many

@@ -104,6 +104,7 @@ class BlockType(StrEnum):
     VERDICT = "verdict"
     BREAKER_TRIP = "breaker_trip"
     ACCEPTANCE_GATE = "acceptance_gate"
+    MODEL_CALL = "model_call"
     LESSON_WRITE = "lesson_write"
     LESSON_REFUSED = "lesson_refused"
     RUN_END = "run_end"

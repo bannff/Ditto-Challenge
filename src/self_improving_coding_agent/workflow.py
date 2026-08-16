@@ -80,6 +80,7 @@ def run_ticket(
         )
         for node in nodes:  # tool calls reach the ledger; the engine stays ledger-unaware
             node.hooks = [recorder.for_node(node.name)]
+            node.model_wrapper = recorder.wrap_model
         task = f"Ticket [{ticket.domain}] {ticket.id}: {ticket.request}"
         wf = run_workflow(
             nodes,
