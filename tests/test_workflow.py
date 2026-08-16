@@ -4,6 +4,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from self_improving_coding_agent import workflow
+from self_improving_coding_agent.cassette import Cassette
 from self_improving_coding_agent.contracts import BlockType, Outcome, Ticket, Verdict
 from self_improving_coding_agent.graph import WorkflowResult
 from self_improving_coding_agent.ledger import Ledger
@@ -283,3 +284,66 @@ def test_a_degraded_run_with_a_clean_chain_still_teaches_memory_nothing(tmp_path
         b for b in ledger.blocks(report.run_id) if b.block_type == BlockType.LESSON_REFUSED
     )
     assert refused.payload["workflow_degraded"] is True
+
+
+# ---- record and re-execute ----------------------------------------------------
+
+
+def _fixture_root_repo(tmp_path):
+    root = tmp_path / "fixtures"
+    root.mkdir()
+    return root, _init_repo(root / "target_app")
+
+
+def test_a_replayed_run_never_ships_and_never_teaches(tmp_path):
+    """Recorded model output is not evidence. A re-executed run is a verification harness:
+    it re-runs the acceptance gate for real, but it cannot commit and cannot write memory."""
+    _, repo = _fixture_root_repo(tmp_path)
+    ticket = Ticket(
+        id="T-replay",
+        repository=str(repo),
+        request="add a greeting function to the app module",
+        acceptance_command="pytest test_app.py",
+    )
+    memory = MagicMock()
+    memory.retrieve.return_value = []
+    ledger = Ledger(tmp_path / "ledger.db")
+    cassette = Cassette(tmp_path / "c.jsonl")
+    cassette.mode = "replay"  # the mode is what bars shipping and learning
+
+    with patch.object(workflow, "run_workflow", return_value=_wf_success()), patch.object(
+        workflow, "setup_telemetry"
+    ):
+        report = workflow.run_ticket(
+            ticket,
+            models=cast(Any, object()),
+            kb=cast(Any, MagicMock()),
+            memory=cast(Any, memory),
+            ledger=ledger,
+            cassette=cassette,
+        )
+
+    assert report.acceptance is not None and report.acceptance.passed  # the gate really ran
+    assert report.branch is None  # but nothing shipped
+    memory.store.assert_not_called()  # and nothing was learned
+    assert report.lesson is None
+    refused = next(
+        b for b in ledger.blocks(report.run_id) if b.block_type == BlockType.LESSON_REFUSED
+    )
+    assert refused.payload["replaying"] is True
+    assert "replayed" in refused.payload["reason"]
+
+
+def test_a_normal_run_is_marked_as_not_replaying(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    ticket = Ticket(
+        id="T-normal",
+        repository=str(repo),
+        request="add a greeting function to the app module",
+        acceptance_command="pytest test_app.py",
+    )
+    report, memory, ledger = _run(ticket, tmp_path, _wf_success())
+
+    start = ledger.blocks(report.run_id)[0]
+    assert start.payload["replaying"] is False
+    memory.store.assert_called_once()  # a real run still teaches

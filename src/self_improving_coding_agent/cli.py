@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from pathlib import Path
 
+from .cassette import Cassette, CassetteError
 from .contracts import Outcome, Ticket
 from .ledger import Ledger
 from .settings import get_settings
@@ -28,9 +30,43 @@ def _load_ticket(path: str, repo: str) -> Ticket:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     ticket = _load_ticket(args.ticket, args.repo)
-    report = run_ticket(ticket)
+    settings = get_settings()
+    cassette = None
+    if args.record:
+        # Refused unless the target is under the configured fixture root: a cassette holds
+        # unredacted prompts, so recording a real repository is not offered.
+        cassette = Cassette.for_run(args.record, settings.cassettes_dir).open_for_record(
+            Path(ticket.repository), settings.cassette_fixture_root
+        )
+        print(f"recording model I/O to {cassette.path} (unredacted, owner-only)")
+    report = run_ticket(ticket, cassette=cassette)
     print(f"run {report.run_id}: {report.outcome}")
     print(report.model_dump_json(indent=2))
+    return 0 if report.outcome in _OK_OUTCOMES else 1
+
+
+def _cmd_reexecute(args: argparse.Namespace) -> int:
+    """Re-run a recorded ticket's decisions from its cassette, with no model calls.
+
+    The acceptance gate still runs for real — a replayed gate result would be a test-gate
+    bypass — and the run is barred from committing or teaching memory, because recorded
+    model output is not evidence.
+    """
+    settings = get_settings()
+    ticket = _load_ticket(args.ticket, args.repo)
+    try:
+        cassette = Cassette.for_run(args.cassette, settings.cassettes_dir).load(
+            Path(ticket.repository)
+        )
+    except CassetteError as e:
+        print(f"cannot replay: {e}")
+        return 1
+
+    print(f"re-executing from {cassette.path} ({len(cassette)} recorded calls, offline)")
+    report = run_ticket(ticket, cassette=cassette)
+    print(f"replay run {report.run_id}: {report.outcome}")
+    print(f"  committed: {report.branch or 'no — a replayed run never ships'}")
+    print(f"  taught memory: {'yes' if report.lesson else 'no — recorded output is not evidence'}")
     return 0 if report.outcome in _OK_OUTCOMES else 1
 
 
@@ -81,7 +117,22 @@ def _build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="resolve a ticket against a target repo")
     run.add_argument("--ticket", required=True, help="path to a ticket JSON file")
     run.add_argument("--repo", required=True, help="path to the target repository")
+    run.add_argument(
+        "--record",
+        metavar="CASSETTE_ID",
+        help="record model I/O for later re-execution. Fixture repos only: a cassette is "
+        "unredacted, so this is refused unless the target is under cassette_fixture_root.",
+    )
     run.set_defaults(func=_cmd_run)
+
+    reexec = sub.add_parser(
+        "reexecute",
+        help="re-run a recorded ticket's decisions from its cassette, offline (no model calls)",
+    )
+    reexec.add_argument("ticket", help="the same ticket json the cassette was recorded from")
+    reexec.add_argument("--repo", required=True, help="path to the target repository")
+    reexec.add_argument("--cassette", required=True, help="cassette id passed to --record")
+    reexec.set_defaults(func=_cmd_reexecute)
 
     replay = sub.add_parser(
         "replay", help="verify and walk a recorded run's hash chain (offline, no model calls)"

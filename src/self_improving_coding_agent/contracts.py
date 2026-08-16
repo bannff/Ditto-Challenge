@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -13,6 +14,11 @@ SCHEMA_VERSION = 1
 # prev_hash of a run's first block. Chains are per-run: a global head would serialize
 # concurrent tickets, and the hard requirement is that they never clobber each other.
 GENESIS_HASH = "0" * 64
+
+# A run id becomes a path component (worktree dir, session dir, cassette file), and it can
+# arrive from argv, so it is validated before it is ever joined to a path. Canonical here
+# because more than one module needs the same guarantee.
+RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
 def _now() -> datetime:

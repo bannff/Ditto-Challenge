@@ -10,7 +10,16 @@ from __future__ import annotations
 
 import uuid
 
-from .contracts import AcceptanceResult, BlockType, Lesson, Outcome, RunReport, Ticket
+from .cassette import Cassette, model_wrapper
+from .contracts import (
+    AcceptanceResult,
+    BlockType,
+    Lesson,
+    Outcome,
+    ProvenanceDecision,
+    RunReport,
+    Ticket,
+)
 from .graph import WorkflowModels, default_models, run_workflow
 from .kb import PolicyKB, make_query_policy_tool
 from .ledger import Ledger
@@ -32,6 +41,21 @@ def _new_run_id() -> str:
     return "run-" + uuid.uuid4().hex[:12]
 
 
+def _refusal_reason(
+    provenance: ProvenanceDecision, intact: bool, degraded: bool, replaying: bool
+) -> str:
+    """Why memory was not allowed to learn from this run. Most specific reason first."""
+    if replaying:
+        return "a replayed run re-derives a recorded lesson; it is not a fresh observation"
+    if not provenance.allowed:
+        return provenance.reason
+    if not intact:
+        return "part of the run's record failed to write, so the record can't be trusted"
+    if degraded:
+        return "the run degraded, so its conclusions were never verified"
+    return "refused"
+
+
 def run_ticket(
     ticket: Ticket,
     *,
@@ -41,14 +65,19 @@ def run_ticket(
     memory: LessonMemory | None = None,
     ledger: Ledger | None = None,
     telemetry_console: bool = True,
+    cassette: Cassette | None = None,
 ) -> RunReport:
     settings = get_settings()
     settings.ensure_dirs()
     run_id = _new_run_id()
     ledger = ledger or Ledger(settings.ledger_db)
     recorder = RunRecorder(ledger, run_id)
+    # A replayed run drives its tools from recorded model output. Recorded output is not
+    # evidence, so such a run is a verification harness: it never ships and never teaches.
+    replaying = cassette is not None and cassette.mode == "replay"
     recorder.append(
-        BlockType.RUN_START, {"ticket_id": ticket.id, "domain": ticket.domain}
+        BlockType.RUN_START,
+        {"ticket_id": ticket.id, "domain": ticket.domain, "replaying": replaying},
     )
 
     reason = should_refuse(ticket)
@@ -80,7 +109,7 @@ def run_ticket(
         )
         for node in nodes:  # tool calls reach the ledger; the engine stays ledger-unaware
             node.hooks = [recorder.for_node(node.name)]
-            node.model_wrapper = recorder.wrap_model
+            node.model_wrapper = model_wrapper(recorder.wrap_model, cassette)
         task = f"Ticket [{ticket.domain}] {ticket.id}: {ticket.request}"
         wf = run_workflow(
             nodes,
@@ -130,7 +159,7 @@ def run_ticket(
             outcome = Outcome.FAILURE
 
         diff = worktree.diff()
-        if success:
+        if success and not replaying:
             worktree.commit(f"autodev: resolve {ticket.id}")
             keep_branch = True
         else:
@@ -150,7 +179,7 @@ def run_ticket(
         # tried to write landed (an omitted block leaves a chain that still verifies), and
         # the workflow itself didn't degrade (first-hand, not laundered through the ledger).
         provenance = ledger.provenance(run_id)
-        may_learn = provenance.allowed and recorder.intact and not wf.degraded
+        may_learn = provenance.allowed and recorder.intact and not wf.degraded and not replaying
         if may_learn:
             memory.store(lesson)
             recorder.append(
@@ -160,11 +189,11 @@ def run_ticket(
             recorder.append(
                 BlockType.LESSON_REFUSED,
                 {
-                    "reason": provenance.reason if not provenance.allowed
-                    else "the run degraded, so its conclusions were never verified",
+                    "reason": _refusal_reason(provenance, recorder.intact, wf.degraded, replaying),
                     "chain_verified": provenance.allowed,
                     "record_complete": recorder.intact,
                     "workflow_degraded": wf.degraded,
+                    "replaying": replaying,
                 },
             )
 

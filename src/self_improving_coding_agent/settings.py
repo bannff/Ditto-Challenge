@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # from its rootdir looking for config, so a worktree under our own tree would let the
     # gate load this project's pyproject/conftest instead of the target's.
     worktrees_dir: Path = Field(default=Path(tempfile.gettempdir()) / "autodev-worktrees")
+    # Recording model I/O for replay is only permitted against repos under this root, and
+    # only when it is explicitly set. Unset means recording is off — fail-closed, because a
+    # cassette holds unredacted prompts (repo source, ticket text, primed lessons) and no
+    # pattern-based scrubber can make arbitrary repo source safe to persist.
+    cassette_fixture_root: Path | None = None
 
     @property
     def reviewer_model_id(self) -> str:
@@ -66,6 +71,10 @@ class Settings(BaseSettings):
     @property
     def sessions_dir(self) -> Path:
         return self.data_dir / "sessions"
+
+    @property
+    def cassettes_dir(self) -> Path:
+        return self.data_dir / "cassettes"
 
     def ensure_dirs(self) -> None:
         for p in (self.chroma_dir, self.mem0_dir, self.sessions_dir, self.worktrees_dir):

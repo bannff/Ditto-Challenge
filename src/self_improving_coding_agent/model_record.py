@@ -43,6 +43,15 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def digest_request(messages: list[Message], tool_specs: list[ToolSpec] | None) -> str:
+    """The conversation plus the tools offered — what changes when behavior changes."""
+    return _digest({"messages": messages, "tools": _tool_names(tool_specs)})
+
+
+def digest_system(system_prompt: Any) -> str:
+    return _digest(_system_text(system_prompt))
+
+
 def _system_text(system_prompt: Any) -> str:
     """The system prompt is either a string or a list of content blocks."""
     if system_prompt is None:
@@ -178,8 +187,8 @@ class RecordingModel(Model):
         **kwargs: Any,
     ) -> AsyncIterable[StreamEvent]:
         request = {
-            "request_hash": _digest({"messages": messages, "tools": _tool_names(tool_specs)}),
-            "system_hash": _digest(_system_text(system_prompt)),
+            "request_hash": digest_request(messages, tool_specs),
+            "system_hash": digest_system(system_prompt),
         }
         summary = _StreamSummary()
         try:
@@ -212,7 +221,7 @@ class RecordingModel(Model):
     ) -> AsyncGenerator[dict[str, T | Any], None]:
         request = {
             "request_hash": _digest({"messages": prompt, "tools": [output_model.__name__]}),
-            "system_hash": _digest(_system_text(system_prompt)),
+            "system_hash": digest_system(system_prompt),
         }
         output: Any = None
         try:
