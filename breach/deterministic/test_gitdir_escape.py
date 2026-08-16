@@ -38,8 +38,12 @@ DENIED = [
 
 # Files whose names merely start with `.git`. A ticket may legitimately edit any of these,
 # so the predicate has to match a whole component, never a prefix.
+# `.gitattributes` is deliberately absent: it is git config that ships *inside* the tree, so
+# no `-c` flag disables it, and one `-diff` line reduces a real change to "Binary files
+# differ" in the evidence a reviewer reads. It is denied at the tool layer for that reason —
+# see tests/test_checkpoint_restore.py.
 ALLOWED = [
-    ".gitignore", ".gitattributes", ".gitmodules", ".gitkeep",
+    ".gitignore", ".gitmodules", ".gitkeep",
     ".github/workflows/ci.yml", ".github/CODEOWNERS", "src/.gitignore",
     "docs/.gitbook.yaml", "gitlab.py", "digit.py", "src/git/plumbing.py",
 ]

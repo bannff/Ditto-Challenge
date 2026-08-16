@@ -30,6 +30,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from self_improving_coding_agent import workflow
 from self_improving_coding_agent.contracts import Outcome, RunReport, Ticket, Verdict
@@ -627,10 +628,14 @@ def test_concurrent_tickets_do_not_clobber_each_other(repo: Path, tmp_path: Path
 
 def test_an_oversized_ticket_and_diff_stay_bounded(repo: Path, tmp_path: Path):
     # A huge/unicode ticket must degrade within bounds, not hang or store an unbounded row.
-    request = (
-        "Fix the ownership check on the order read path. \u202eنص عربي\u202c \u200b"
-        + "pad " * 40_000
-    )
+    # The contract now caps `request`, because refusal.py scans it with a regex table before
+    # a budget is armed. So past the cap nothing runs at all, and the largest ticket that can
+    # reach the loop is one sitting exactly on it — which is what the rest of this asserts.
+    prose = "Fix the ownership check on the order read path. \u202eنص عربي\u202c \u200b"
+    with pytest.raises(ValidationError):
+        Ticket(id="too-big", repository=str(repo), request=prose + "pad " * 40_000,
+               acceptance_command=GREEN_GATE)
+    request = (prose + "pad " * 40_000)[:20_000]
     huge = "\n".join(f"# line {i} \u0301\u0301" for i in range(60_000))
     started = time.monotonic()
     report, ledger = _run(repo, tmp_path, request, GREEN_GATE,

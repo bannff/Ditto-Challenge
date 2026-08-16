@@ -41,11 +41,20 @@ class NodeState(StrEnum):
 
 
 class Ticket(BaseModel):
+    """A unit of work, authored by a stranger. Every field here is untrusted input.
+
+    The length bounds are a control, not tidiness. `request` is scanned by a table of
+    regexes in `refusal.py` before a budget is armed, so an unbounded request makes the
+    gate's cost unbounded too — one backtracking row anywhere in that table would be a hang
+    reachable from the CLI. Capping the contract means no future row can reintroduce that,
+    and a ticket nobody could read is not a ticket.
+    """
+
     id: str
     repository: str
-    request: str
+    request: str = Field(max_length=20_000)
     domain: str = "general"
-    acceptance_command: str | None = None
+    acceptance_command: str | None = Field(default=None, max_length=2_000)
     created_at: datetime = Field(default_factory=_now)
 
 
