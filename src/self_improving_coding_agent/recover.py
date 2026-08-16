@@ -39,6 +39,12 @@ def _seed_of(blocks: list[Block]) -> str | None:
     `run_ticket` calls `track_git(worktree.seed)` immediately after creating the worktree and
     before any node runs, so the earliest non-null `git_hash` in the chain is the seed. Later
     blocks carry checkpoints instead.
+
+    That relies on an ordering the workflow guarantees: the graph emits discover's attempt
+    before any node can checkpoint, so at least one block carries the seed. A chain that
+    somehow recorded a checkpoint first would misidentify it, which `is_descendant` then
+    catches — a checkpoint is never an ancestor of itself, so the ancestry check fails closed
+    rather than recovering the wrong tree.
     """
     for block in blocks:
         if block.git_hash:
