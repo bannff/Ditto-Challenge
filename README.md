@@ -113,6 +113,26 @@ For a local ledger record, this CLI command performs the same offline chain walk
 uv run autodev replay <run_id>
 ```
 
+## Recovering a run's last checkpointed tree
+
+When a stage passes its evaluator checkpoint its tree is committed to a private
+`refs/autodev/checkpoints/<run_id>`, so a failed attempt can be rolled back before the next
+one starts. After the run, this reports what is still recoverable:
+
+```bash
+uv run autodev recover <run_id> --repo <target-repo>
+```
+
+Git's ref names which commit is recoverable; the ledger decides whether it may be used,
+supplying the run's seed for an ancestry check and corroborating that the commit is one the
+chain recorded. If the two disagree, recovery is refused. Offline — no model calls, no network.
+
+It reports rather than checks the tree out, and prints the git command to do that yourself.
+A recovered tree passed an evaluator checkpoint, **not the acceptance gate**, and holds code
+the agent wrote from an untrusted ticket, so running its tests executes that code. A run whose
+change was reverted has no recoverable checkpoint by design, and only the most recent refs are
+kept, so this is a rollback aid rather than an archive.
+
 ## Optional recording
 
 For deterministic re-execution of model decisions against fixture repositories only:
