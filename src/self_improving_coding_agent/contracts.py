@@ -76,6 +76,43 @@ class Verdict(BaseModel):
     diagnosis: str | None = None
 
 
+class LessonDraft(BaseModel):
+    """What the Learn node is asked to return: the rule, and nothing wrapped around it.
+
+    A schema rather than an instruction, because the instruction demonstrably does not hold.
+    The critic's prompt already said "Output only the lesson, and stop", but across every
+    recorded run the learn swarm terminated after a *single* agent — it never handed off — so
+    the refiner and critic that were supposed to strip the framing never ran, and whichever
+    agent went first became the whole node. When that was the drafter, whose own prompt tells
+    it to recall existing lessons first, the stored "lesson" opened with "Good - I've recalled
+    the existing lessons and loaded the lesson-writing skill..." and buried the rule 200 words
+    down. Memory then retrieved that preamble on later runs.
+
+    The field carries **no validation constraints**, deliberately, and that is a safety
+    property rather than laziness. When a forced structured-output tool call fails
+    validation, the SDK returns a tool *error* instead of raising
+    (`StructuredOutputTool.stream`), the event loop recurses on `tool_use`, and forced mode
+    stays latched with only the schema tool on offer — so the model is asked for the same
+    value, fails the same constraint, and loops. `force_attempted` guards the refusal path,
+    not the invalid-value path. Measured with `min_length`/`max_length` here: 312 model calls
+    to a `RecursionError`, bounded only by the 300s node timeout, times `max_redos`. That
+    breaks the bounded-runs requirement, and a length cap is exactly the constraint a chatty
+    model violates repeatedly.
+
+    So the shape is the schema's job and the policy is ours: length and usability are applied
+    at the write boundary in `workflow._lesson_content`, where a bad value costs nothing.
+    Anything added here must be unfailable — describe it in `description`, don't validate it.
+    """
+
+    rule: str = Field(
+        description=(
+            "One durable, generalizable rule for a future run, phrased as an instruction, "
+            "under 600 characters. No preamble, no restatement of the ticket, no file paths, "
+            "secrets or run ids."
+        ),
+    )
+
+
 class Lesson(BaseModel):
     schema_version: int = SCHEMA_VERSION
     ticket_id: str

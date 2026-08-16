@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
 from strands_evals.evaluators import Evaluator
 
 
@@ -56,6 +57,23 @@ class NodeConfig:
     skill_paths: list[Path] = field(default_factory=list)
     steering_prompt: str | None = None
     shared_tools: list[Any] = field(default_factory=list)
+    # Optional schema for the node's answer. When set, every agent in the node gets it as
+    # its `structured_output_model`, so whichever one ends the swarm returns a parsed object
+    # instead of prose — the SDK forces the schema tool only at `end_turn`, so an agent that
+    # hands off is unaffected. Node-scoped rather than per-AgentSpec because any agent can
+    # be the terminal one: a swarm is free to stop wherever it likes, and in practice this
+    # one usually stops at its entry point.
+    #
+    # This is how a node states its contract instead of asking for it. "Output only the
+    # lesson, and stop" was in the critic's prompt and still produced 200 words of
+    # thinking-out-loud, because the run never reached the critic.
+    #
+    # A schema here MUST be unfailable: no min/max, no pattern, no custom validator. A forced
+    # structured-output call that fails validation comes back as a tool *error*, not an
+    # exception, so the event loop recurses with forced mode still latched and the model is
+    # asked for the same rejected value until wall-clock runs out (measured: 312 calls to a
+    # RecursionError). Validate at your own write boundary instead, where a bad value is free.
+    output_model: type[BaseModel] | None = None
     # Extra agent-plane plugins for every agent in this node. Empty in normal operation;
     # the adversarial harness uses it to attach a fault injector (strands_evals chaos).
     extra_plugins: list[Any] = field(default_factory=list)

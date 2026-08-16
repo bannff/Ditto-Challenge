@@ -16,12 +16,13 @@ from .contracts import (
     AcceptanceResult,
     BlockType,
     Lesson,
+    LessonDraft,
     Outcome,
     ProvenanceDecision,
     RunReport,
     Ticket,
 )
-from .graph import WorkflowModels, default_models, run_workflow
+from .graph import WorkflowModels, WorkflowResult, default_models, run_workflow
 from .kb import PolicyKB, make_query_policy_tool
 from .ledger import Ledger
 from .memory import LessonMemory, make_memory_tools
@@ -37,15 +38,30 @@ from .worktree import Worktree, WorktreeError
 # the entire multi-node run so a confused ticket can't burn unbounded wall-clock/cost.
 RUN_DEADLINE_SECONDS = 1800.0
 
+# What a stored rule has to be. Applied here rather than on the LessonDraft contract, where a
+# constraint is a model-reachable loop; see LessonDraft. The cap matters because every stored
+# rule is embedded and searched on every later run, so length is a recall cost, not cosmetics.
+_MIN_RULE_CHARS = 16
+_MAX_RULE_CHARS = 600
+
 
 def _new_run_id() -> str:
     return "run-" + uuid.uuid4().hex[:12]
 
 
 def _refusal_reason(
-    provenance: ProvenanceDecision, intact: bool, degraded: bool, replaying: bool
+    provenance: ProvenanceDecision,
+    intact: bool,
+    degraded: bool,
+    replaying: bool,
+    has_rule: bool = True,
 ) -> str:
-    """Why memory was not allowed to learn from this run. Most specific reason first."""
+    """Why memory was not allowed to learn from this run. Most specific reason first.
+
+    `has_rule` is checked last on purpose. A degraded or breaker-tripped run has no rule
+    *because* it was cut short, so reporting the missing rule would name the symptom and hide
+    the cause. It is the reason only when nothing else went wrong.
+    """
     if replaying:
         return "a replayed run re-derives a recorded lesson; it is not a fresh observation"
     if not provenance.allowed:
@@ -54,7 +70,35 @@ def _refusal_reason(
         return "part of the run's record failed to write, so the record can't be trusted"
     if degraded:
         return "the run degraded, so its conclusions were never verified"
+    if not has_rule:
+        return "the Learn node produced no usable rule, so there is nothing to remember"
     return "refused"
+
+
+def _lesson_content(wf: WorkflowResult) -> str | None:
+    """The rule the Learn node produced, or None if it produced nothing usable.
+
+    The node's `output_model` is what makes this a field rather than a guess. Persisting
+    `final_output` instead stored the agent's whole closing turn, so a lesson read "Good -
+    I've recalled the existing lessons..." and memory served that back on later runs.
+
+    Returning None rather than a placeholder is the point: "no rule" has to be a *reason not
+    to teach*, checked where that decision is made. Every path that loses the schema today
+    also degrades the run, so a placeholder would be unreachable — but only by coincidence of
+    two distant mechanisms, and a value that is stored correctly by accident is one refactor
+    from being stored wrongly.
+
+    The length policy lives here, not on the contract: a constraint on the schema field is
+    reachable by the model and loops the forced tool call (see `LessonDraft`). Here an
+    over-long rule costs one truncation.
+    """
+    draft = wf.final_structured
+    if not isinstance(draft, LessonDraft):
+        return None
+    rule = " ".join(draft.rule.split())
+    if len(rule) < _MIN_RULE_CHARS:  # a fragment is not a rule
+        return None
+    return rule[:_MAX_RULE_CHARS]
 
 
 def run_ticket(
@@ -184,11 +228,13 @@ def run_ticket(
             worktree.revert()  # a change that isn't verified is never shipped
         recorder.track_git(worktree.head_hash())
 
-        lesson = Lesson(
-            ticket_id=ticket.id,
-            outcome=outcome,
-            content=(wf.final_output.strip() or "no lesson produced"),
-            tags=[ticket.domain],
+        # No usable rule means no lesson object at all, rather than a placeholder one that
+        # every gate below would have to remember to reject.
+        rule = _lesson_content(wf)
+        lesson = (
+            Lesson(ticket_id=ticket.id, outcome=outcome, content=rule, tags=[ticket.domain])
+            if rule
+            else None
         )
         # Provenance gate: memory asks the ledger whether this run may teach it anything.
         # An honest failure still teaches — only a run whose record can't be trusted is
@@ -197,8 +243,14 @@ def run_ticket(
         # tried to write landed (an omitted block leaves a chain that still verifies), and
         # the workflow itself didn't degrade (first-hand, not laundered through the ledger).
         provenance = ledger.provenance(run_id)
-        may_learn = provenance.allowed and recorder.intact and not wf.degraded and not replaying
-        if may_learn:
+        may_learn = (
+            lesson is not None
+            and provenance.allowed
+            and recorder.intact
+            and not wf.degraded
+            and not replaying
+        )
+        if may_learn and lesson is not None:
             memory.store(lesson)
             recorder.append(
                 BlockType.LESSON_WRITE, {"ticket_id": ticket.id, "outcome": str(outcome)}
@@ -207,11 +259,18 @@ def run_ticket(
             recorder.append(
                 BlockType.LESSON_REFUSED,
                 {
-                    "reason": _refusal_reason(provenance, recorder.intact, wf.degraded, replaying),
+                    "reason": _refusal_reason(
+                        provenance,
+                        recorder.intact,
+                        wf.degraded,
+                        replaying,
+                        has_rule=lesson is not None,
+                    ),
                     "chain_verified": provenance.allowed,
                     "record_complete": recorder.intact,
                     "workflow_degraded": wf.degraded,
                     "replaying": replaying,
+                    "rule_produced": lesson is not None,
                 },
             )
 

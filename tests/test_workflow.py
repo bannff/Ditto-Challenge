@@ -5,7 +5,13 @@ from unittest.mock import MagicMock, patch
 
 from self_improving_coding_agent import workflow
 from self_improving_coding_agent.cassette import Cassette
-from self_improving_coding_agent.contracts import BlockType, Outcome, Ticket, Verdict
+from self_improving_coding_agent.contracts import (
+    BlockType,
+    LessonDraft,
+    Outcome,
+    Ticket,
+    Verdict,
+)
 from self_improving_coding_agent.graph import WorkflowResult
 from self_improving_coding_agent.ledger import Ledger
 
@@ -28,6 +34,7 @@ def _wf_success():
         verdicts=[Verdict(node="discover", passed=True)],
         outputs={"learn": "Lesson: prefer small diffs."},
         final_output="Lesson: prefer small diffs.",
+        final_structured=LessonDraft(rule="Prefer small diffs; verify the boundary case."),
         outcome=Outcome.SUCCESS,
         degraded=False,
     )

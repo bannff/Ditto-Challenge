@@ -20,9 +20,11 @@ verified; they stay on the list so the history is legible. Every item has a test
 5. **#2c `.gitignore` hides evidence**, **#4 empty PATH**, **#5 predictable worktrees base**,
    **#7 stray processes** — one-to-three lines each; #4 and #5 were introduced by the last pass.
    **NEXT: #2c.**
-6. **#8 unbounded output**, **#9 audit gap**, **#10 forgeable output**, **#2d tool crash**,
-   **#12 lesson hygiene**.
-7. **#11 conftest owns the verdict**, **#13 no FS/egress sandbox** — need design answers, not
+6. ~~**#12 lesson hygiene**~~ — done; surfaced **#12b** (no cumulative token ceiling, and
+   DESIGN.md claims one). With #3 also closed, the two artifact-regeneration blockers are clear.
+7. **#8 unbounded output**, **#9 audit gap**, **#10 forgeable output**, **#2d tool crash**,
+   **#12b token ceiling**.
+8. **#11 conftest owns the verdict**, **#13 no FS/egress sandbox** — need design answers, not
    more argv validation.
 
 ## ~~1. CRITICAL — `pytest @argfile` bypasses the entire flag allowlist~~ FIXED
@@ -243,13 +245,54 @@ not be authored by the agent. Hostile `testpaths` also selects a green subset (a
 commit — noting this does *not* catch a hook present at both commits — or (b) the process
 sandbox in DESIGN §Uplevel, where the verdict arrives on an independent channel.
 
-## 12. Memory hygiene — the stored lesson is the agent's chatty preamble
+## ~~12. Memory hygiene — the stored lesson is the agent's chatty preamble~~ FIXED
 
-`workflow.py` persists `wf.final_output` verbatim, so a lesson reads *"Perfect. Now I'll draft
+~~`workflow.py` persists `wf.final_output` verbatim, so a lesson reads *"Perfect. Now I'll draft
 the durable lesson…"* instead of the lesson. Directly degrades the self-improvement dimension:
-future recalls surface framing text. Observed in both app1 and app2 live runs.
-**Fix:** have Learn emit only the lesson (or extract it), and reject a lesson that fails the
-existing `lesson_shape` rubric before persisting.
+future recalls surface framing text. Observed in both app1 and app2 live runs.~~
+
+**Root cause, and it wasn't the prompt.** Checked all 81 recorded sessions in `.data/sessions/`:
+the learn swarm **never hands off** — 11/11 learn runs terminated after a single agent
+(8x `['scribe']`, 3x `['drafter']`). So the refiner and critic whose prompts said *"Output only
+the lesson, and stop"* never ran, and whichever agent went first *was* the whole node. When that
+was the drafter — whose own prompt tells it to recall existing lessons first — it narrated the
+recall and buried the rule 200 words down. Asking harder in the prompt could never have worked.
+
+**Fixed by stating the node's answer as a schema instead of requesting it.** `NodeConfig` gains
+`output_model`, threaded into `Agent(structured_output_model=...)`; the learn node declares
+`LessonDraft`. The SDK forces the schema tool at `end_turn`, so whichever agent finishes returns
+a parsed object. Node-scoped, not per-agent, precisely because any agent can be the terminal one.
+`workflow._lesson_content` persists the `rule` field and **never** falls back to the prose —
+a run that produced no rule teaches nothing, which is now a stated reason (`rule_produced:
+false`) rather than a placeholder nobody rejects. Side benefit: `AgentResult.__str__` returns
+the schema JSON once a structured value exists, so the narration no longer reaches the
+evaluators either.
+
+Two defects found while fixing it:
+
+| # | Defect | Why it mattered |
+|---|---|---|
+| a | **A constrained schema field is an unbounded retry loop.** `min_length`/`max_length` on `LessonDraft.rule` was reachable by the model, and the SDK turns a `ValidationError` on a *forced* tool call into a tool **error**, not an exception — so the event loop recurses with forced mode latched and only the schema tool on offer, asking for the same rejected value forever. `force_attempted` guards the refusal path, not the invalid-value path. | 312 model calls to a `RecursionError`, bounded only by the 300s node timeout x `max_redos`. Breaks the **bounded-runs** hard requirement, and a length cap is exactly what a chatty model violates repeatedly. Fixed by making the schema unfailable and applying length policy at our own write boundary; the trap is documented next to `NodeConfig.output_model` so the next schema can't re-arm it. |
+| b | `_extract_text` read `reversed(results.values())`, but `results` is a dict keyed by agent name and **overwritten in place**, so its order is order of *first* execution. On a revisit ("drafter, refiner, critic, refiner") it returned the critic's text while the refiner actually finished. | Latent, **not** the cause of #12 — verified zero divergence across all 81 recorded sessions, because only one had a revisit and it ended on the same agent. Fixed anyway via the SDK's own ordering record, `SwarmResult.node_history[-1]`. |
+
+Verified: 22 tests in `tests/test_lesson_capture.py`, including the real SDK event loop
+(narrate-then-comply forces a second pass and yields a parsed rule) and a real `Swarm`. Three
+mutation checks confirm the production lines are load-bearing. Also confirmed the drafter can
+still call `recall` on an earlier turn — forcing narrows only the last turn — so dedup against
+prior lessons is intact. **Not** verified live: AWS creds were expired, so there is no Bedrock
+run behind this.
+
+## 12b. No cumulative token ceiling exists, and DESIGN.md claims one
+
+Found while fixing #12. The product's hard requirement is a ceiling on *iterations / wall-clock
+/ tokens*; handoffs, iterations and both timeouts are enforced, but there is no cumulative token
+bound anywhere. `settings.max_tokens` is a per-call output cap and `memory.py`'s is Mem0's LLM
+config — neither bounds a run. The SDK's own primitive, `strands.types.agent.Limits(turns=N)`,
+terminates gracefully with `stop_reason="limit_turns"`, but it is per-invocation and **`Swarm`
+never forwards it** (no `limits` anywhere in `swarm.py`), so config alone won't do it.
+**Also a doc correction:** the in-flight DESIGN.md rewrite says limits "on handoffs, iterations,
+node/runtime timeouts, **and tokens** stop flailing". Either wire a ceiling or drop "and tokens"
+— it sits next to a hard requirement a reader will check.
 
 ## 13. No filesystem/egress sandbox (GH #28)
 

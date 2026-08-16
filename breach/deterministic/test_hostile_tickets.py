@@ -33,7 +33,13 @@ import pytest
 from pydantic import ValidationError
 
 from self_improving_coding_agent import workflow
-from self_improving_coding_agent.contracts import Outcome, RunReport, Ticket, Verdict
+from self_improving_coding_agent.contracts import (
+    LessonDraft,
+    Outcome,
+    RunReport,
+    Ticket,
+    Verdict,
+)
 from self_improving_coding_agent.graph import WorkflowResult
 from self_improving_coding_agent.ledger import MAX_EVIDENCE_CHARS, Ledger
 from self_improving_coding_agent.refusal import should_refuse
@@ -128,6 +134,7 @@ def _fake_workflow(
     writes: dict[str, str] | None = None,
     apply_edit: bool = True,
     final_output: str = DEFAULT_LESSON,
+    rule: str | None = DEFAULT_LESSON,
 ) -> Fake:
     """Stand in for the node graph: applies a real edit inside the run's own worktree.
 
@@ -145,6 +152,9 @@ def _fake_workflow(
             verdicts=[Verdict(node="implement", passed=outcome == Outcome.SUCCESS)],
             outputs={"learn": final_output},
             final_output=final_output,
+            # What memory learns from is the Learn node's declared schema, not its prose, so
+            # a fake that sets only `final_output` describes a run that teaches nothing.
+            final_structured=LessonDraft(rule=rule) if rule else None,
             outcome=outcome,
             degraded=degraded,
         )

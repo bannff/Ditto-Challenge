@@ -30,6 +30,7 @@ from strands_evals.evaluators import (
 )
 from strands_evals.types.trace import EvaluationLevel
 
+from .contracts import LessonDraft
 from .eval_scope import AgentToolsExtractor
 from .node import AgentSpec, EvaluatorSpec, NodeConfig
 
@@ -251,8 +252,9 @@ def build_reference_nodes(
                 system_prompt=(
                     _preamble("Learn") + " As the drafter, given the eval results from every "
                     "stage, draft ONE durable lesson for next time: on success the pattern that "
-                    "worked, on failure what went wrong and how to avoid it. First recall "
-                    "existing lessons so you don't repeat one already stored."
+                    "worked, on failure what went wrong and how to avoid it. Recall existing "
+                    "lessons first so you don't repeat one already stored, and do not narrate "
+                    "that recall — the rule is the whole answer."
                 ),
                 tools=list(context_tools),
             ),
@@ -278,12 +280,18 @@ def build_reference_nodes(
             ),
         ],
         skill_paths=[SKILLS / "lesson-writing"],
+        # The node's answer is a schema, not prose. This swarm stops at its entry point in
+        # practice, so the refiner and critic that were meant to strip framing never run;
+        # declaring the shape gets it from whichever agent actually finishes.
+        output_model=LessonDraft,
         evaluators=[
             _rubric(
                 "lesson_shape",
-                "Pass if the output is exactly ONE durable, generalizable lesson phrased as an "
-                "actionable rule — not zero, not many, not ticket-specific trivia — and contains "
-                "no secrets, absolute paths, or run-specific IDs.",
+                "The output is a JSON object with a `rule` field. Judge the rule only. Pass if "
+                "it is exactly ONE durable, generalizable lesson phrased as an actionable rule "
+                "— not zero, not many, not ticket-specific trivia — carries no preamble or "
+                "commentary about the agent's own process, and contains no secrets, absolute "
+                "paths, or run-specific IDs.",
                 threshold=0.5,
             ),
             _judge("conciseness", ConcisenessEvaluator, 0.5),
