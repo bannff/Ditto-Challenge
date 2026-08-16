@@ -12,8 +12,9 @@ verified; they stay on the list so the history is legible. Every item has a test
 
 1. ~~**#1 `@argfile`**~~ — done (and it grew: see the four sub-findings under it).
 2. ~~**#2 `.git` write → shell RCE**~~ — done; surfaced **#2b/#2c/#2d**, and closed #6 en route.
-3. **#2b agent-written ini reaches outside the jail** — high. **NEXT.**
-4. **#3 regression: a shipped ticket is refused** — breaks a graded demo.
+3. ~~**#2b agent-written ini reaches outside the jail**~~ — done; also fixed **#2e**, a
+   false-failure our own hardening had introduced.
+4. **#3 regression: a shipped ticket is refused** — breaks a graded demo. **NEXT.**
 4. **#4 empty PATH**, **#5 predictable worktrees base**, **#6 git HOME lies**, **#7 stray
    processes** — one-to-three lines each; #4 and #5 were introduced by the last pass.
 5. **#8 unbounded output**, **#9 audit gap**, **#10 forgeable output**, **#12 lesson hygiene**.
@@ -74,16 +75,44 @@ which also closes #6. 27 regression tests; 11 legitimate `.git*` forms (`.gitign
 don't author and git has no flag to ignore. A hostile repo shipped with `filter.*` already set
 still executes — same class as #13 (we run the target's code by design).
 
-## 2b. HIGH (new) — `_gate_config()` adopts an agent-written ini that reaches outside the jail
+## ~~2b. HIGH — `_gate_config()` adopts an agent-written ini that reaches outside the jail~~ FIXED
 
-Found while fixing #2. `_gate_config()` prefers the target's own config, but the agent can
-*write* that config. Two keys escape:
-- `log_file = /outside/x.log` — pytest **creates and truncates** it. Verified: gate rc 0, file
-  created outside the worktree. An in-jail write becomes an out-of-jail write.
-- `pythonpath = /outside` — verified an outside module was imported and executed by the gate.
-  `-o addopts=`/`testpaths=` are forced; `pythonpath` is not.
-**Fix:** force `-o pythonpath=` (check the bundled targets first) and either force
-`-o log_file=` or prefer our own empty ini when the agent authored the file.
+~~`_gate_config()` preferred the target's own config so a legitimate target keeps its markers
+and `filterwarnings` — but the agent can *write* that file. Three classes of escape, all
+verified through the real tool path:~~
+- ~~**write:** `log_file = /outside/x.log` — pytest `os.makedirs()` the parent and opens the
+  path. Worse than a stray file: with `log_file_mode = a` and `log_file_format = %(message)s`
+  the *content* is the test's own logging calls, i.e. arbitrary attacker-chosen text appended
+  to `~/.zshenv` with a green gate.~~
+- ~~**import:** `pythonpath = /outside` put a directory on `sys.path`; an outside module was
+  imported and executed by the gate.~~
+- ~~**verdict:** `python_files = test_green.py` (or `python_functions`, `norecursedirs`) simply
+  doesn't collect the failing file, so a red suite exits 0 — no `addopts`/`testpaths` needed.~~
+**Fixed structurally, not key by key:** the gate now trusts only config that shipped with the
+target at this run's **base commit** (`self._seed`, not HEAD — `checkpoint()` commits the
+agent's own work, so a HEAD-anchored check is useless after one checkpoint). Unmodified → the
+target's file in place, so relative keys like `pythonpath = src` still resolve; modified or
+deleted → the committed blob copied into the run's HOME; never shipped → an empty ini of ours.
+That closes the keys nobody has enumerated yet, which a forced `-o` per key cannot: pytest 8.4
+registers 47 ini keys and 9.1 registers 56.
+`-o log_file=` is also forced, since no gate needs it. `-o pythonpath=` deliberately **not**
+forced — it breaks a legitimate src-layout target, and once config is seed-pinned `pythonpath`
+is target-committed content, i.e. the same trust level as the `conftest.py` we execute anyway.
+**Residual:** the target's *committed* config is trusted, so a hostile repo can still put a
+directory on `sys.path` through it (same class as #13). An agent edit to pytest config is
+ignored by the gate for that run — a false refusal, never a false pass.
+
+## ~~2e. Our own hardening made ordinary targets unrunnable~~ FIXED
+
+Introduced by #1's `-p no:cacheprovider`. Unregistering the plugin makes `cache_dir` an
+*unknown* ini key, so a target that sets `cache_dir` **and** `filterwarnings = error` — both
+ordinary — turns that warning into `INTERNALERROR`, exit 3, no tests ran. Verified: exit 0
+normally, exit 3 under our gate. Every ticket against such a repo would be unrunnable, and
+pytest 9's `strict_config` widens it.
+**Fixed:** keep cacheprovider enabled and force `cache_dir` into the run's private HOME via a
+new `{home}`-templated forced arg. Same containment (nothing written in the jail, tree stays
+clean), no unknown-key warning. Verified: the target runs again, cache lands in HOME, and
+`is_clean()` is still true afterwards.
 
 ## 2c. MEDIUM (new) — an agent-written `.gitignore` hides a file from our own evidence
 

@@ -194,7 +194,8 @@ def _git(
         ["git", *_GIT_HARDENING, *pinned, "-C", str(repo), *args],
         capture_output=True,
         text=True,
-        timeout=timeout,
+        errors="replace",  # repo bytes are not guaranteed UTF-8; a decode error must not
+        timeout=timeout,   # escape a caller that only handles WorktreeError
         check=False,
         env=_safe_env(),
     )
@@ -341,28 +342,64 @@ class Worktree:
         except ValueError as e:
             raise WorktreeError(f"unparseable command: {e}") from e
         try:
-            argv = resolve(normalize(args), in_jail=self.root, config=self._gate_config())
+            argv = resolve(
+                normalize(args),
+                in_jail=self.root,
+                config=self._gate_config(),
+                home=Path(self._home),
+            )
         except AcceptanceRejected as e:
             raise WorktreeError(f"command not allowed: {command!r} ({e})") from e
         return self.run(argv, timeout=timeout)
 
     def _gate_config(self) -> Path:
-        """The config file the gate runs with: the target's own, or an empty one we own.
+        """The config file the gate runs with — pinned, and pinned to *committed* content.
 
-        Pinning it stops pytest walking up past the worktree and adopting a directory above
-        the jail as its config — an ancestor ini needs only a `pythonpath` line to put
-        attacker-chosen directories on `sys.path` for the run.
+        Two jobs. Pinning `-c` at all stops pytest walking up past the worktree and adopting
+        a directory above the jail as its config. Pinning it to the config that shipped with
+        the target at this run's base commit stops the agent *writing* the gate's own config:
+        an ini it authors is a write primitive (`log_file` creates and appends outside the
+        jail), an import path (`pythonpath` puts any directory on `sys.path`) and a verdict
+        switch (`python_files = test_green.py` drops the failing file, so a red suite exits
+        0). Ignoring agent-authored config closes all of those at once, including the keys
+        nobody has enumerated yet — a forced `-o` per dangerous key would not.
+
+        Anchored to `self._seed`, never to HEAD: `checkpoint()` commits the agent's own work,
+        so after one checkpoint `HEAD:pytest.ini` *is* the agent's file.
+
+        Three outcomes, in order of fidelity:
+          - shipped and untouched -> the target's own file, used in place, so relative
+            `paths` keys (`pythonpath = src`) still resolve against the worktree;
+          - shipped but modified (or deleted) -> the committed blob, copied into this run's
+            HOME, so the target keeps its markers/filterwarnings/asyncio_mode and only the
+            agent's edit is dropped;
+          - not shipped -> an empty ini of ours.
         """
         for name, marker in PYTEST_CONFIG_FILES:
-            candidate = self.root / name
-            if not candidate.is_file():
+            shipped = self._wt_git("cat-file", "blob", f"{self._seed}:{name}")
+            if shipped.returncode != 0:  # not in the target at the base commit
                 continue
-            if marker is None or marker in candidate.read_text(errors="replace"):
-                return candidate
-        empty = Path(self._home) / "gate-pytest.ini"
-        if not empty.exists():
-            empty.write_text("[pytest]\n")
-        return empty
+            # The marker is checked against the committed text, so an empty pyproject.toml
+            # can't be given a pytest section by the agent to shadow a real tox.ini.
+            if marker is not None and marker not in shipped.stdout:
+                continue
+            untouched = self._wt_git("diff", "--quiet", self._seed, "--", name)
+            if untouched.returncode == 0 and (self.root / name).is_file():
+                return self.root / name
+            return self._own_config(name, shipped.stdout)
+        return self._own_config("gate-pytest.ini", "[pytest]\n")
+
+    def _own_config(self, name: str, body: str) -> Path:
+        """Write a gate config into this run's HOME, which is outside the jail.
+
+        Rewritten on every call rather than reused: gate code runs as our uid, so a previous
+        gate run could have edited this file, and a stale copy would be config the agent
+        reached after all. The name is preserved because pytest picks its parser by suffix —
+        `pyproject.toml` is only TOML if it is still called that.
+        """
+        path = Path(self._home) / name
+        path.write_text(body)
+        return path
 
     def is_clean(self) -> bool:
         r = self._wt_git("status", "--porcelain")

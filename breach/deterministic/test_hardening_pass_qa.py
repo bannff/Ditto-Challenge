@@ -82,7 +82,8 @@ def test_a_gate_that_could_never_fail_is_refused_before_any_spend(repo: Path, tm
     _assert_target_untouched(repo, head, branch)
 
 
-FORCED_PREFIX = ["pytest", "-o", "addopts=", "-o", "testpaths=", "-p", "no:cacheprovider"]
+FORCED_PREFIX = ["pytest", "-o", "addopts=", "-o", "testpaths=", "-o", "log_file=",
+                 "-p", "no:cacheprovider"]
 
 
 def test_forced_args_are_always_ours_and_always_first(tmp_path: Path):

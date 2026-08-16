@@ -72,6 +72,8 @@ class RunnerPolicy:
     forced_args: tuple[str, ...] = ()
     # Forced args templated on the worktree root; rendered with {jail} by resolve().
     jail_args: tuple[str, ...] = ()
+    # Forced args templated on the run's private HOME; rendered with {home} by resolve().
+    home_args: tuple[str, ...] = ()
     # How this runner is told which config file to use, if it supports being pinned.
     config_flag: str | None = None
 
@@ -89,9 +91,24 @@ _PYTEST = RunnerPolicy(
     #   addopts:         a repo ini could otherwise inject --co and silence a red suite.
     #   testpaths:       a repo ini could otherwise choose the test set for a bare `pytest`
     #                    and quietly hide the failing test.
-    #   no:cacheprovider: keeps .pytest_cache out of the worktree, so the diff and is_clean()
-    #                    still mean what they say.
-    forced_args=("-o", "addopts=", "-o", "testpaths=", "-p", "no:cacheprovider"),
+    #   cache_dir:       keeps .pytest_cache out of the worktree, so the diff and is_clean()
+    #                    still mean what they say. Pointed at the run's own HOME rather than
+    #                    disabling cacheprovider: unregistering the plugin makes `cache_dir`
+    #                    an unknown key, which a target that sets it *and* treats warnings as
+    #                    errors turns into an INTERNALERROR — a legitimate repo made
+    #                    unrunnable by our own hardening.
+    #   log_file:        an out-of-jail *write* primitive, not just a stray file. pytest
+    #                    os.makedirs() the parent and opens the path itself, and with
+    #                    log_file_mode=a plus log_file_format=%(message)s the content is the
+    #                    test's own logging calls — i.e. append arbitrary text to ~/.zshenv.
+    #                    Nothing the gate needs; we capture the child's output ourselves.
+    forced_args=(
+        "-o", "addopts=",
+        "-o", "testpaths=",
+        "-o", "log_file=",
+    ),
+    # Rendered against the run's private HOME, which is outside the jail.
+    home_args=("-o", "cache_dir={home}/pytest_cache"),
     # confcutdir bounds conftest.py *execution* to the worktree: a config file in any ancestor
     # directory otherwise moves rootdir above the jail and pytest imports that directory's
     # conftest.py. rootdir keeps ids and the report anchored to the worktree.
@@ -128,7 +145,11 @@ def normalize(args: list[str]) -> list[str]:
 
 
 def resolve(
-    args: list[str], *, in_jail: Path | None = None, config: Path | None = None
+    args: list[str],
+    *,
+    in_jail: Path | None = None,
+    config: Path | None = None,
+    home: Path | None = None,
 ) -> list[str]:
     """Validate `args` and return the argv to actually execute.
 
@@ -144,6 +165,8 @@ def resolve(
     if in_jail is not None:
         jail = str(in_jail.resolve())
         pinned = tuple(a.format(jail=jail) for a in policy.jail_args)
+    if home is not None:
+        pinned = (*pinned, *(a.format(home=str(home)) for a in policy.home_args))
     # A config file we choose: `--rootdir` pins only rootdir, so pytest would still walk up
     # and adopt an ancestor's ini (whose `pythonpath` alone can poison sys.path).
     if config is not None and policy.config_flag:
