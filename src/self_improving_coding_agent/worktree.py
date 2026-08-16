@@ -65,7 +65,13 @@ _GIT_HARDENING = [
 # the repo's control plane, not source: in a linked worktree it is a *file* (the gitdir
 # pointer), so one in-jail write redirects every later git command at a repo whose config the
 # agent wrote — and git config executes filter/textconv commands through /bin/sh.
-_DENIED_COMPONENTS = frozenset({".git"})
+# `.gitattributes` is here for the same reason: it is git configuration that ships *inside*
+# the tree, so no `-c` flag can disable it. One line marking a path `-diff` turns a real
+# change into "Binary files differ" in the evidence a reviewer reads, and a `filter=` or
+# `diff=<driver>` entry runs a command through /bin/sh for anyone who later runs git in that
+# tree with a matching driver in their own config. Denied at any depth, since git reads it
+# per-directory.
+_DENIED_COMPONENTS = frozenset({".git", ".gitattributes"})
 
 
 def _fold_component(component: str) -> str:
@@ -406,7 +412,20 @@ class Worktree:
         return r.returncode == 0 and r.stdout.strip() == ""
 
     def diff(self) -> str:
-        return self._wt_git("diff", "HEAD").stdout
+        """The change this run made, as the reviewer and the ledger see it.
+
+        Two things `git diff HEAD` gets wrong for our purposes, both of which silently
+        shrink the evidence rather than erroring:
+
+        - Untracked files are invisible to it, so a ticket that adds a new module produced
+          an *empty* diff. `add -N` records intent-to-add so new files show up as additions
+          without staging their contents.
+        - A `.gitattributes` marking a path `-diff` (or pointing it at a textconv driver)
+          reduces a real change to "Binary files differ". `--text --no-textconv` forces the
+          content, so an in-tree attribute can't decide what a reviewer is allowed to read.
+        """
+        self._wt_git("add", "-N", "--", ".")
+        return self._wt_git("diff", "--text", "--no-textconv", "HEAD", "--").stdout
 
     def head_hash(self) -> str | None:
         """The commit this worktree points at. Recorded in ledger blocks so the chain
@@ -434,6 +453,11 @@ class Worktree:
         """
         self._wt_git("reset", "--hard", self._seed)
         self._wt_git("clean", "-fdx")
+        # And drop the checkpoint ref, or "discard everything this run did" would be true of
+        # the working tree and false of the object store: the exact tree the test-gate
+        # rejected would stay reachable in the target repo, one command from being restored.
+        # Mid-run rollback uses the in-memory checkpoint list, so nothing needs this ref.
+        _git(self.repo, "update-ref", "-d", self.checkpoint_ref)
 
     def checkpoint(self, node: str) -> str | None:
         """Commit the current tree as a recoverable checkpoint, returning its hash.

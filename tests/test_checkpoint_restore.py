@@ -16,6 +16,7 @@ import pytest
 from self_improving_coding_agent.worktree import (
     CHECKPOINT_REF_PREFIX,
     Worktree,
+    WorktreeError,
 )
 
 
@@ -257,3 +258,79 @@ def test_pruning_a_repo_with_no_checkpoints_is_a_no_op(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__]))
+
+
+# ---- evidence integrity --------------------------------------------------------
+# The diff is the graded artifact. Both of these shrank it silently rather than erroring.
+
+
+def test_a_new_file_appears_in_the_diff(tmp_path):
+    """`git diff HEAD` ignores untracked files, so a ticket that adds a module produced an
+    EMPTY diff — the report claimed a change with no evidence of it."""
+    _, wt = _worktree(tmp_path)
+    (wt.root / "greeting.py").write_text("def hello():\n    return 'hi'\n")
+
+    diff = wt.diff()
+
+    assert "greeting.py" in diff
+    assert "def hello()" in diff
+
+
+def test_a_new_file_in_a_new_directory_appears_too(tmp_path):
+    _, wt = _worktree(tmp_path)
+    (wt.root / "pkg").mkdir()
+    (wt.root / "pkg" / "mod.py").write_text("VALUE = 42\n")
+
+    assert "VALUE = 42" in wt.diff()
+
+
+def test_the_agent_cannot_author_gitattributes(tmp_path):
+    """One line marking a path `-diff` turns a real change into 'Binary files differ' in the
+    evidence, and a `filter=` entry runs a command through /bin/sh for whoever runs git in
+    that tree next. It is git config that ships inside the tree, so no -c flag disables it."""
+    _, wt = _worktree(tmp_path)
+
+    for candidate in (".gitattributes", "sub/.gitattributes", "./.GITATTRIBUTES"):
+        with pytest.raises(WorktreeError):
+            wt.safe_path(candidate)
+
+
+def test_a_gitattributes_the_target_shipped_cannot_hide_a_change(tmp_path):
+    # The agent can't write one, but a target repo may legitimately ship one — the diff must
+    # still show content rather than letting an in-tree attribute decide what a reviewer reads.
+    repo = _init_repo(tmp_path / "repo")
+    (repo / ".gitattributes").write_text("app.py -diff\n")
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "attrs"], check=True)
+    wt = Worktree.create(repo, "run-attrs", tmp_path / "wt")
+    (wt.root / "app.py").write_text("x = 999  # the change a reviewer must see\n")
+
+    assert "the change a reviewer must see" in wt.diff()
+
+
+# ---- revert really discards ----------------------------------------------------
+
+
+def test_revert_drops_the_checkpoint_ref_so_rejected_work_is_unrecoverable(tmp_path):
+    """Otherwise 'a change that breaks tests is reverted, not shipped' is true of the working
+    tree and false of the object store: the rejected tree stays reachable in the target repo."""
+    repo, wt = _worktree(tmp_path)
+    (wt.root / "app.py").write_text("the change the gate rejected\n")
+    assert wt.checkpoint("implement") is not None
+    assert _refs(repo) == [wt.checkpoint_ref]
+
+    wt.revert()
+
+    assert _refs(repo) == []
+
+
+def test_a_successful_run_keeps_its_checkpoint_ref(tmp_path):
+    # revert() is only called on non-success paths, so a green run's checkpoints survive for
+    # recovery; this pins that the ref deletion is scoped to revert and not to teardown.
+    repo, wt = _worktree(tmp_path)
+    (wt.root / "app.py").write_text("x = 2\n")
+    wt.checkpoint("implement")
+
+    wt.remove(keep_branch=True)
+
+    assert _refs(repo) == [wt.checkpoint_ref]
