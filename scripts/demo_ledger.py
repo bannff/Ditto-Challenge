@@ -5,14 +5,23 @@ throwaway database, with only the agent work itself stood in for. So the hashes,
 verification, the tamper detection and the provenance decisions you see are the shipped
 implementation, not a narration of it.
 
-Four acts:
+The acts:
   1. A resolved run leaves a verifiable chain, and replay walks it.
   2. Editing the record is detected, at the exact block.
   3. Deleting the end of the record is detected too (links alone can't see this).
   4. The provenance gate: which runs are allowed to teach memory, and which are refused.
+  5. A run whose record was altered teaches nothing either.
+  6. Rollback: a failed attempt is put back to the last good tree before the retry.
+  7. Recovery: what is still recoverable after a run ends, and what deliberately isn't.
+
+Acts 6 and 7 need a real git repository, so they build a throwaway one. Nothing here touches
+your repo, your `.data/`, or your configured worktrees directory: the repo, its worktree base,
+and the ledger all live inside a single TemporaryDirectory that is deleted on the way out, and
+the last act *checks* that containment rather than asking you to take it on trust. Re-running
+any other demo afterwards is unaffected.
 
 Usage:
-  uv run python scripts/demo_ledger.py                 # all four acts, offline
+  uv run python scripts/demo_ledger.py                      # every act, offline
   uv run python scripts/demo_ledger.py --out demos/ledger   # also save the transcript
   uv run python scripts/demo_ledger.py --from-run <run_id>  # replay a real recorded run
 """
@@ -23,6 +32,7 @@ import argparse
 import io
 import json
 import sqlite3
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -31,7 +41,9 @@ from self_improving_coding_agent.cli import render_replay
 from self_improving_coding_agent.contracts import BlockType, NodeState
 from self_improving_coding_agent.ledger import Ledger
 from self_improving_coding_agent.recorder import RunRecorder, _record_args
+from self_improving_coding_agent.recover import plan_recovery
 from self_improving_coding_agent.settings import get_settings
+from self_improving_coding_agent.worktree import Worktree
 
 GIT_HASH = "4f2c8a1b9e7d3c5a6b8f0d2e4a6c8e0b2d4f6a8c"
 
@@ -205,6 +217,166 @@ def act_five_tampered_chain_refuses(ledger: Ledger) -> None:
     )
 
 
+def _throwaway_repo(base: Path) -> Path:
+    """A git repo that exists only for this demo, inside the temp dir."""
+    repo = base / "target"
+    repo.mkdir(parents=True, exist_ok=True)
+    for args in (
+        ["init", "-q"],
+        ["config", "user.email", "demo@autodev"],
+        ["config", "user.name", "autodev demo"],
+    ):
+        subprocess.run(["git", "-C", str(repo), *args], check=True)
+    (repo / "inventory.py").write_text(
+        "def low_stock(items, threshold):\n"
+        "    return [i for i in items if i.quantity < threshold]\n"
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
+    return repo
+
+
+def _show(wt, label: str) -> None:
+    body = (wt.root / "inventory.py").read_text().strip().splitlines()[-1].strip()
+    debris = sorted(p.name for p in wt.root.glob("*.py") if p.name != "inventory.py")
+    print(f"  {label:<22} {body}")
+    if debris:
+        print(f"  {'':<22} leftover files: {debris}")
+
+
+def act_six_rollback(base: Path) -> tuple[Path, str, str]:
+    _rule("ACT 6 — a failed attempt is rolled back before the retry, not built on")
+    repo = _throwaway_repo(base)
+    wt = Worktree.create(repo, "run-demo-rollback", base / "worktrees")
+    print(f"\nthrowaway repo: {repo}\nseed commit:    {wt.seed[:12]}")
+
+    _step("attempt 1 — a good change that passes its evaluator checkpoint")
+    (wt.root / "inventory.py").write_text(
+        "def low_stock(items, threshold):\n"
+        "    return [i for i in items if i.quantity <= threshold]\n"
+    )
+    checkpoint = wt.checkpoint("implement")
+    _show(wt, "tree now:")
+    print(f"  checkpointed as        {checkpoint[:12] if checkpoint else None}")
+
+    _step("attempt 2 — a change that fails its checkpoint, leaving debris behind")
+    (wt.root / "inventory.py").write_text(
+        "def low_stock(items, threshold):\n    return BROKEN_SENTINEL\n"
+    )
+    (wt.root / "scratch_notes.py").write_text("# half-applied scaffolding\n")
+    _show(wt, "tree now:")
+
+    _step("the retry boundary restores the last good tree (this is restore_cb firing)")
+    wt.restore(checkpoint or wt.seed)
+    _show(wt, "tree now:")
+    print(
+        "\n  Without this, attempt 3 would start on top of BROKEN_SENTINEL plus the leftover\n"
+        "  file, and the informed retry would diagnose a tree nobody intended."
+    )
+
+    _step("and a final revert goes all the way back to the seed, not to the checkpoint")
+    wt.revert()
+    _show(wt, "tree now:")
+    print(
+        f"  clean: {wt.is_clean()} | diff empty: {wt.diff() == ''}\n"
+        "\n  Revert anchors to the seed on purpose. Once a checkpoint exists, HEAD *is* that\n"
+        "  checkpoint, so `reset --hard HEAD` would keep the very change it must discard —\n"
+        "  'a change that breaks tests is reverted' would quietly become 'reverted to the\n"
+        "  last unverified checkpoint'."
+    )
+    wt.remove(keep_branch=False)
+    return repo, "run-demo-rollback", wt.seed
+
+
+def act_seven_recovery(base: Path, ledger: Ledger) -> Path:
+    _rule("ACT 7 — what is still recoverable after a run ends, and what deliberately isn't")
+    repo = _throwaway_repo(base / "recovery")
+
+    # A run that checkpointed and did NOT ship: recoverable.
+    kept = "run-demo-kept"
+    recorder = RunRecorder(ledger, kept)
+    recorder.append(BlockType.RUN_START, {"ticket_id": "bug-1", "domain": "inventory"})
+    wt = Worktree.create(repo, kept, base / "worktrees")
+    recorder.track_git(wt.seed)
+    recorder.record_status({"node": "discover", "state": str(NodeState.COMPLETE)})
+    (wt.root / "inventory.py").write_text("def low_stock(i, t):\n    return i <= t\n")
+    recorder.track_git(wt.checkpoint("implement"))
+    recorder.record_status({"node": "implement", "state": str(NodeState.COMPLETE)})
+    recorder.record_status({"node": "verify", "state": str(NodeState.FAILED)})
+    recorder.append(BlockType.RUN_END, {"outcome": "failure"})
+    wt.remove(keep_branch=False)
+
+    # A run whose change was rejected and reverted: deliberately NOT recoverable.
+    dropped = "run-demo-reverted"
+    recorder2 = RunRecorder(ledger, dropped)
+    recorder2.append(BlockType.RUN_START, {"ticket_id": "bug-2", "domain": "inventory"})
+    wt2 = Worktree.create(repo, dropped, base / "worktrees")
+    recorder2.track_git(wt2.seed)
+    # A block carrying the seed hash, before any checkpoint moves it — the workflow always
+    # emits discover's attempt first, and that is what marks the run's starting commit.
+    recorder2.record_status({"node": "discover", "state": str(NodeState.COMPLETE)})
+    (wt2.root / "inventory.py").write_text("def low_stock(i, t):\n    return REJECTED\n")
+    recorder2.track_git(wt2.checkpoint("implement"))
+    recorder2.record_status({"node": "implement", "state": str(NodeState.COMPLETE)})
+    wt2.revert()  # the gate said no
+    recorder2.append(BlockType.RUN_END, {"outcome": "failure"})
+    wt2.remove(keep_branch=False)
+
+    for run_id, blurb in (
+        (kept, "checkpointed, then the run failed at verify without shipping"),
+        (dropped, "checkpointed, then the change was rejected and reverted"),
+    ):
+        _step(f"autodev recover {run_id}   ({blurb})")
+        decision = plan_recovery(ledger, repo, run_id)
+        verdict = "RECOVERABLE" if decision.allowed else "NOT RECOVERABLE"
+        print(f"  {verdict}")
+        print(f"  {decision.reason}")
+        if decision.allowed and decision.commit:
+            print(f"  commit {decision.commit[:12]} from node '{decision.node}'")
+            print(f"  ledger corroborates git's ref: {decision.corroborated}")
+
+    print(
+        "\n  git's ref names WHICH commit — the ref store is written by the workflow, never by\n"
+        "  the ledger, so a row in an unsigned database cannot choose what gets recovered.\n"
+        "  The chain says WHETHER you may have it: it supplies the run's seed, which after the\n"
+        "  run exists nowhere else, and confirms the commit is one it recorded.\n"
+        "\n  The reverted run has nothing to recover by design. Work the gate rejected must not\n"
+        "  be one command away from coming back."
+    )
+    return repo
+
+
+def _containment_check(temp_base: Path) -> None:
+    _rule("CONTAINMENT — this demo checked its own blast radius")
+    here = Path(__file__).resolve().parents[1]
+    settings = get_settings()
+
+    refs = subprocess.run(
+        ["git", "-C", str(here), "for-each-ref", "--format=%(refname)", "refs/autodev/*"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.split()
+    worktrees = subprocess.run(
+        ["git", "-C", str(here), "worktree", "list"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.splitlines()
+
+    print(f"\n  this repo's refs/autodev/*        {refs or 'none — nothing was written here'}")
+    print(f"  this repo's extra worktrees      {len(worktrees) - 1}")
+    print(f"  configured worktrees dir used    no (demo used {temp_base / 'worktrees'})")
+    print(f"  real ledger written              no (demo used its own db under {temp_base})")
+    print(f"  real ledger path untouched       {settings.ledger_db}")
+    assert not refs, "demo leaked a checkpoint ref into this repo"
+    assert len(worktrees) <= 1, "demo left a worktree registered in this repo"
+    print(
+        "\n  Everything above lived in one temp directory that is now gone, so re-running any\n"
+        "  other demo is unaffected."
+    )
+
+
 def _honest_limits() -> None:
     _rule("HONEST LIMITS")
     print(
@@ -220,13 +392,17 @@ def _honest_limits() -> None:
     )
 
 
-def _all_acts(ledger: Ledger) -> None:
+def _all_acts(ledger: Ledger, temp_base: Path) -> None:
     print(
         "Offline hash-ledger demo — no AWS credentials, no network, no model calls.\n"
-        "Real Ledger / RunRecorder / replay code against a throwaway database."
+        "Real Ledger / RunRecorder / Worktree / replay / recover code, against a throwaway\n"
+        f"database and a throwaway git repo under {temp_base}."
     )
     for act in (act_one, act_two, act_three, act_four, act_five_tampered_chain_refuses):
         act(ledger)
+    act_six_rollback(temp_base)
+    act_seven_recovery(temp_base, ledger)
+    _containment_check(temp_base)
     _honest_limits()
 
 
@@ -240,9 +416,10 @@ def main(argv: list[str]) -> int:
         return render_replay(Ledger(get_settings().ledger_db), args.from_run)
 
     with tempfile.TemporaryDirectory(prefix="autodev_ledger_demo_") as tmp:
-        ledger = Ledger(Path(tmp) / "demo-ledger.db")
+        base = Path(tmp)
+        ledger = Ledger(base / "demo-ledger.db")
         if args.out is None:
-            _all_acts(ledger)
+            _all_acts(ledger, base)
             return 0
         # Show the transcript and keep a copy, so a judge can read the saved one instead.
         args.out.mkdir(parents=True, exist_ok=True)
@@ -251,7 +428,7 @@ def main(argv: list[str]) -> int:
         original = sys.stdout
         try:
             sys.stdout = _Tee(original, buffer)
-            _all_acts(ledger)
+            _all_acts(ledger, base)
         finally:
             sys.stdout = original
         transcript.write_text(buffer.getvalue())

@@ -64,7 +64,55 @@ def test_ledger_demo_runs_offline_and_shows_every_claim(capsys):
     assert "CHAIN BROKEN HERE" in out  # act 2: tampering is pinpointed
     assert "chain is truncated" in out  # act 3: a deleted tail is caught
     assert "LEARNS" in out and "REFUSED" in out  # act 4: the gate discriminates
+    assert "BROKEN_SENTINEL" in out  # act 6: the bad attempt is shown before rollback
+    assert "RECOVERABLE" in out and "NOT RECOVERABLE" in out  # act 7: both outcomes
     assert "tamper-EVIDENT, not tamper-proof" in out  # the limits are stated
+
+
+def test_the_ledger_demo_leaves_nothing_behind_in_this_repo(capsys):
+    """Acts 6 and 7 create real git worktrees and checkpoint refs, so the demo has to be
+    unable to disturb this repo or a later run of any other demo. It checks that itself."""
+    import subprocess
+
+    from demo_ledger import main
+
+    root = Path(__file__).resolve().parents[1]
+
+    def autodev_refs() -> list[str]:
+        return subprocess.run(
+            ["git", "-C", str(root), "for-each-ref", "--format=%(refname)", "refs/autodev/*"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+
+    def worktrees() -> int:
+        return len(
+            subprocess.run(
+                ["git", "-C", str(root), "worktree", "list"],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+        )
+
+    refs_before, wt_before = autodev_refs(), worktrees()
+
+    assert main([]) == 0
+
+    assert autodev_refs() == refs_before  # no checkpoint ref leaked here
+    assert worktrees() == wt_before  # no worktree left registered here
+    assert "none — nothing was written here" in capsys.readouterr().out
+
+
+def test_the_ledger_demo_is_repeatable(capsys):
+    # Two runs back to back must both pass: a demo that poisons its own second run would
+    # poison whatever the operator runs next.
+    from demo_ledger import main
+
+    assert main([]) == 0
+    assert main([]) == 0
+    assert "CONTAINMENT" in capsys.readouterr().out
 
 
 def test_ledger_demo_saves_a_transcript(tmp_path):
