@@ -9,6 +9,7 @@ for both outcomes even though the Learn agent distills its text.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from .cassette import Cassette, model_wrapper
 from .contracts import (
@@ -97,9 +98,10 @@ def run_ticket(
     memory = memory or LessonMemory()
 
     worktree = Worktree.create(ticket.repository, run_id, settings.worktrees_dir)
+    Worktree.prune_checkpoints(Path(ticket.repository).resolve())
     keep_branch = False
     try:
-        recorder.track_git(worktree.head_hash())
+        recorder.track_git(worktree.seed)
         primed = memory.retrieve(ticket.request)
         nodes = build_reference_nodes(
             worktree_tools=make_worktree_tools(worktree),
@@ -111,6 +113,20 @@ def run_ticket(
             node.hooks = [recorder.for_node(node.name)]
             node.model_wrapper = model_wrapper(recorder.wrap_model, cassette)
         task = f"Ticket [{ticket.domain}] {ticket.id}: {ticket.request}"
+        checkpoints: list[str] = []
+
+        def checkpoint(node_name: str) -> str | None:
+            """Commit the tree that just passed, and point the chain at it."""
+            commit = worktree.checkpoint(node_name)
+            if commit is not None:
+                checkpoints.append(commit)
+                recorder.track_git(commit)  # the VERDICT block references restorable state
+            return commit
+
+        def restore() -> None:
+            """Before an informed retry, put the tree back to the last known-good state."""
+            worktree.restore(checkpoints[-1] if checkpoints else worktree.seed)
+
         wf = run_workflow(
             nodes,
             task,
@@ -118,6 +134,8 @@ def run_ticket(
             status_cb=recorder.status_callback(status_cb),
             session_prefix=run_id,
             deadline_seconds=RUN_DEADLINE_SECONDS,
+            checkpoint_cb=checkpoint,
+            restore_cb=restore,
         )
 
         acceptance = None

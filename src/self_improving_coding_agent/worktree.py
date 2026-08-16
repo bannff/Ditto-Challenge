@@ -31,7 +31,21 @@ from .acceptance_policy import (
 
 BRANCH_PREFIX = "autodev/"
 
+# Checkpoints live outside refs/heads on purpose: not in `git branch`, not a merge target,
+# not carried by an ordinary `git push`. A retained *branch* of unverified work is a merge
+# accident waiting to happen; a private ref is recoverable state and nothing more.
+CHECKPOINT_REF_PREFIX = "refs/autodev/checkpoints/"
+
+# How many runs' checkpoint refs to keep. Retention is effectively unconditional — most runs
+# pass at least one node — so it has to be bounded, and the objects behind old refs are
+# reclaimed by git's own gc once nothing points at them.
+CHECKPOINT_REFS_KEPT = 20
+
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+# A commit hash read back from a ledger payload is untrusted text before it reaches git: a
+# value starting with `-` would be parsed as a flag.
+_COMMIT_RE = re.compile(r"^[0-9a-f]{7,64}$")
 
 # Disable anything in a target repo that turns a plain git command into code execution or
 # makes our own evidence lie. `-c` cannot wildcard a subsection, so `filter.<name>.clean` and
@@ -191,13 +205,25 @@ class Worktree:
         self.repo = repo
         self.root = root.resolve()
         self.branch = branch
+        self.run_id = branch.removeprefix(BRANCH_PREFIX)
         # The real gitdir, read once before the agent has touched anything, and used on every
         # later call instead of re-discovering it through `<root>/.git`. For a linked worktree
         # it lives under the target repo, outside the jail, so no file tool can reach it.
         self._git_dir = self._discover_git_dir()
+        # The commit this run starts from, read before the agent can touch anything. Every
+        # revert returns here, so it must not be re-read later: once a checkpoint commit
+        # lands, HEAD has moved and "back to the start" would mean the wrong thing.
+        self._seed = self._read_seed()
         # A HOME of this run's own, so gate code can't plant a file under HOME that a later
         # run would import (e.g. usercustomize.py). Removed with the worktree.
         self._home = tempfile.mkdtemp(prefix="autodev_run_home_")
+
+    def _read_seed(self) -> str:
+        r = self._wt_git("rev-parse", "HEAD")
+        seed = r.stdout.strip()
+        if r.returncode != 0 or not _COMMIT_RE.match(seed):
+            raise WorktreeError(f"cannot resolve the starting commit for {self.root}")
+        return seed
 
     def _discover_git_dir(self) -> Path:
         r = _git(self.root, "rev-parse", "--absolute-git-dir")
@@ -210,6 +236,32 @@ class Worktree:
         return _git(
             self.root, *args, git_dir=self._git_dir, work_tree=self.root, timeout=timeout
         )
+
+    @classmethod
+    def prune_checkpoints(cls, repo: Path, keep: int = CHECKPOINT_REFS_KEPT) -> int:
+        """Drop all but the `keep` most recent checkpoint refs. Returns how many were removed.
+
+        Only ever touches `refs/autodev/checkpoints/*` — never `refs/heads/*`.
+        """
+        listed = _git(
+            repo,
+            "for-each-ref",
+            "--sort=-committerdate",
+            "--format=%(refname)",
+            f"{CHECKPOINT_REF_PREFIX}*",
+        )
+        if listed.returncode != 0:
+            return 0
+        refs = [
+            line
+            for line in listed.stdout.splitlines()
+            if line.startswith(CHECKPOINT_REF_PREFIX)
+        ]
+        removed = 0
+        for ref in refs[keep:]:
+            if _git(repo, "update-ref", "-d", ref).returncode == 0:
+                removed += 1
+        return removed
 
     @classmethod
     def create(cls, repo: Path | str, run_id: str, base_dir: Path) -> Worktree:
@@ -336,9 +388,75 @@ class Worktree:
         return self._wt_git("commit", "-m", message).returncode == 0
 
     def revert(self) -> None:
-        """Discard all changes (tracked and untracked) — leaves the working tree clean."""
-        self._wt_git("reset", "--hard", "HEAD")
-        self._wt_git("clean", "-fd")
+        """Discard everything this run did — back to the commit it started from.
+
+        Anchored to the seed, NOT to HEAD. Once a checkpoint commit exists, HEAD is that
+        checkpoint, so `reset --hard HEAD` would keep the very change it is supposed to
+        throw away: "a change that breaks tests is reverted" would quietly become "reverted
+        to the last unverified checkpoint".
+        """
+        self._wt_git("reset", "--hard", self._seed)
+        self._wt_git("clean", "-fdx")
+
+    def checkpoint(self, node: str) -> str | None:
+        """Commit the current tree as a recoverable checkpoint, returning its hash.
+
+        These commits pass a node's *eval checkpoint* — LLM judges plus swarm status — not
+        the acceptance gate, so the message says so. They exist so a failed attempt can be
+        rolled back to a known tree instead of the next attempt inheriting half-applied
+        edits, and so a ledger block can reference real restorable state.
+
+        Kept on `refs/autodev/checkpoints/<run_id>`, deliberately not a branch: it never
+        appears in `git branch`, is not a merge target, and is not carried by an ordinary
+        `git push`. A retained *branch* of unverified work is a merge accident waiting to
+        happen.
+        """
+        if not self.commit(f"autodev: checkpoint {node} (eval-passed; acceptance gate not run)"):
+            return None
+        commit = self.head_hash()
+        if commit is None:
+            return None
+        # The ref is what keeps these commits reachable after the run branch is deleted.
+        if _git(self.repo, "update-ref", self.checkpoint_ref, commit).returncode != 0:
+            return None
+        return commit
+
+    def restore(self, commit: str) -> bool:
+        """Reset the tree to a commit this run made. Returns False if it is not ours.
+
+        The hash arrives from a ledger payload, i.e. a file someone may have edited, so it
+        is shape-checked before it reaches git (a value starting with `-` would otherwise be
+        read as a flag) and then checked for ancestry — restoring an arbitrary commit is not
+        recovery.
+        """
+        if not _COMMIT_RE.match(commit):
+            return False
+        if not self._is_ours(commit):
+            return False
+        if self._wt_git("reset", "--hard", commit).returncode != 0:
+            return False
+        self._wt_git("clean", "-fdx")
+        return True
+
+    def _is_ours(self, commit: str) -> bool:
+        """True when the commit is this run's seed or descends from it."""
+        if commit == self._seed:
+            return True
+        return (
+            _git(
+                self.repo, "merge-base", "--is-ancestor", self._seed, commit, "--"
+            ).returncode
+            == 0
+        )
+
+    @property
+    def seed(self) -> str:
+        """The commit this run started from — what `revert()` returns to."""
+        return self._seed
+
+    @property
+    def checkpoint_ref(self) -> str:
+        return f"{CHECKPOINT_REF_PREFIX}{self.run_id}"
 
     def remove(self, *, keep_branch: bool = False) -> None:
         shutil.rmtree(self._home, ignore_errors=True)  # this run's HOME goes with it

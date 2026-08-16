@@ -180,3 +180,76 @@ def test_node_abandoned_between_attempts_degrades_instead_of_reporting_success()
     assert result.outcome == Outcome.FAILURE
     assert result.verdicts and result.verdicts[0].passed is False  # the failure is recorded
     assert "failed" in states  # so a breaker-trip block reaches the ledger
+
+
+def test_a_passing_node_checkpoints_the_tree_that_earned_it():
+    taken = []
+    result = run_workflow(
+        [_node("discover"), _node("verify")],
+        "t",
+        models=_models(),
+        checkpoint_cb=lambda name: taken.append(name) or f"hash-{name}",
+    )
+
+    assert result.outcome == Outcome.SUCCESS
+    assert taken == ["discover", "verify"]
+
+
+def test_a_failed_attempt_is_rolled_back_before_the_informed_retry():
+    """Without this the retry starts on top of whatever the failed attempt left behind, and
+    diagnoses a tree nobody intended."""
+    node = _node(max_redos=2)
+    calls = {"n": 0}
+    restores = []
+
+    async def fail_then_pass(node_name, evaluators, **kw):
+        calls["n"] += 1
+        passed = calls["n"] > 2  # fail, retry, retry, then pass
+        return Verdict(node=node_name, passed=passed, attempts=kw["attempts"])
+
+    with patch.object(graph, "run_checkpoint", side_effect=fail_then_pass):
+        result = run_workflow(
+            [node],
+            "t",
+            models=_models(),
+            restore_cb=lambda: restores.append(1),
+        )
+
+    assert result.outcome == Outcome.SUCCESS
+    assert len(restores) == 2  # once before each retry, never after the pass
+
+
+def test_no_rollback_once_the_breaker_has_tripped():
+    # Retries are spent, so there is no next attempt to prepare a tree for.
+    node = _node(max_redos=1)
+    restores = []
+
+    async def always_fail(node_name, evaluators, **kw):
+        return Verdict(node=node_name, passed=False, attempts=kw["attempts"])
+
+    with patch.object(graph, "run_checkpoint", side_effect=always_fail):
+        result = run_workflow(
+            [node], "t", models=_models(), restore_cb=lambda: restores.append(1)
+        )
+
+    assert result.degraded is True
+    assert len(restores) == node.max_redos  # one per retry, none for the trip itself
+
+
+def test_a_failed_node_is_not_checkpointed():
+    node = _node(max_redos=0)
+    taken = []
+
+    async def always_fail(node_name, evaluators, **kw):
+        return Verdict(node=node_name, passed=False, attempts=kw["attempts"])
+
+    with patch.object(graph, "run_checkpoint", side_effect=always_fail):
+        run_workflow([node], "t", models=_models(), checkpoint_cb=lambda n: taken.append(n))
+
+    assert taken == []  # only a tree that passed its checkpoint gets committed
+
+
+def test_the_engine_runs_without_any_checkpointing():
+    # The graph must not require a workspace: both callbacks default to None.
+    result = run_workflow([_node("discover")], "t", models=_models())
+    assert result.outcome == Outcome.SUCCESS

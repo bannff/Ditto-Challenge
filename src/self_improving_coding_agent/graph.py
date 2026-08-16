@@ -172,6 +172,12 @@ class _RunContext:
     sessions_dir: Path
     base_task: str
     deadline_seconds: float | None
+    # Optional workspace checkpointing, supplied by the caller so the engine never learns
+    # what a worktree is. checkpoint(node) -> commit hash after a node passes; restore()
+    # puts the tree back before an informed retry, so attempt N+1 starts from a known state
+    # instead of inheriting attempt N's half-applied edits.
+    checkpoint_cb: Callable[[str], str | None] | None = None
+    restore_cb: Callable[[], None] | None = None
     start: float = field(default_factory=time.monotonic)
     outputs: dict[str, str] = field(default_factory=dict)
     verdicts: list[Verdict] = field(default_factory=list)
@@ -251,6 +257,10 @@ class _GateNode(MultiAgentBase):
         if self.verdict.passed:
             self.ctx.outputs[node.name] = self.output
             self.ctx.verdicts.append(self.verdict)
+            # Checkpoint the tree that earned this pass, so a later failure can roll back to
+            # it rather than to the start of the run.
+            if self.ctx.checkpoint_cb is not None:
+                self.ctx.checkpoint_cb(node.name)
             _emit(self.ctx.status_cb, node.name, NodeState.COMPLETE, _avg(self.verdict))
         elif self.attempts > node.max_redos:
             # Retries spent — circuit breaker: degrade with a fixed message, no extra
@@ -260,6 +270,11 @@ class _GateNode(MultiAgentBase):
             self.ctx.outputs[node.name] = DEGRADED_MESSAGE
             self.ctx.verdicts.append(self.verdict)
             _emit(self.ctx.status_cb, node.name, NodeState.FAILED, _avg(self.verdict))
+        elif self.ctx.restore_cb is not None:
+            # This attempt failed and another is coming. Put the tree back to the last
+            # checkpoint first: without this, the informed retry starts on top of whatever
+            # the failed attempt left behind, and diagnoses a tree nobody intended.
+            self.ctx.restore_cb()
 
         # The graph node itself always completes; pass/fail routing happens on the edges,
         # which read the structured verdict — a checkpoint failure is not a node crash.
@@ -371,6 +386,8 @@ def run_workflow(
     session_prefix: str = "run",
     sessions_dir: Path | str | None = None,
     deadline_seconds: float | None = None,
+    checkpoint_cb: Callable[[str], str | None] | None = None,
+    restore_cb: Callable[[], None] | None = None,
 ) -> WorkflowResult:
     resolved = models or default_models()
     storage = Path(sessions_dir) if sessions_dir else get_settings().sessions_dir
@@ -382,5 +399,7 @@ def run_workflow(
         sessions_dir=storage,
         base_task=task,
         deadline_seconds=deadline_seconds,
+        checkpoint_cb=checkpoint_cb,
+        restore_cb=restore_cb,
     )
     return asyncio.run(_run_workflow(nodes, ctx))

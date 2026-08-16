@@ -347,3 +347,79 @@ def test_a_normal_run_is_marked_as_not_replaying(tmp_path):
     start = ledger.blocks(report.run_id)[0]
     assert start.payload["replaying"] is False
     memory.store.assert_called_once()  # a real run still teaches
+
+
+# ---- checkpoints reach the chain as restorable state --------------------------
+
+
+def test_verdict_blocks_reference_a_real_restorable_commit(tmp_path):
+    """The property the ledger docstring claims: a block's git hash is a commit that exists
+    and can be checked out, not a copy of the tree."""
+    repo = _init_repo(tmp_path / "repo")
+    ticket = Ticket(
+        id="T-cp",
+        repository=str(repo),
+        request="add a greeting function to the app module",
+        acceptance_command="pytest test_app.py",
+    )
+    memory = MagicMock()
+    memory.retrieve.return_value = []
+    ledger = Ledger(tmp_path / "ledger.db")
+
+    def passing_node(nodes, task, **kwargs):
+        # The engine's side of the seam: a node passes, so the workflow checkpoints it.
+        # (Checkpoint/restore mechanics themselves are covered in test_checkpoint_restore.)
+        status_cb = kwargs.get("status_cb")
+        checkpoint = kwargs.get("checkpoint_cb")
+        assert checkpoint is not None, "run_ticket must supply a checkpoint callback"
+        if status_cb is not None:
+            status_cb({"node": "implement", "state": "running"})
+        checkpoint("implement")
+        if status_cb is not None:
+            status_cb({"node": "implement", "state": "complete", "eval_score": 0.9})
+        return _wf_success()
+
+    with patch.object(workflow, "run_workflow", side_effect=passing_node), patch.object(
+        workflow, "setup_telemetry"
+    ):
+        report = workflow.run_ticket(
+            ticket,
+            models=cast(Any, object()),
+            kb=cast(Any, MagicMock()),
+            memory=cast(Any, memory),
+            ledger=ledger,
+        )
+
+    hashes = {b.git_hash for b in ledger.blocks(report.run_id) if b.git_hash}
+    assert hashes  # every block carries one
+    for commit in hashes:
+        kind = subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "-t", commit],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert kind.stdout.strip() == "commit", f"{commit} is not a real commit"
+
+
+def test_checkpoint_refs_are_pruned_as_runs_accumulate(tmp_path):
+    # Retention is effectively unconditional, so it has to be bounded somewhere.
+    from self_improving_coding_agent.worktree import CHECKPOINT_REF_PREFIX, Worktree
+
+    repo = _init_repo(tmp_path / "repo")
+    for i in range(3):
+        wt = Worktree.create(repo, f"run-prune-{i}", tmp_path / "wt")
+        (wt.root / "app.py").write_text(f"x = {i + 100}\n")
+        wt.checkpoint("implement")
+        wt.remove(keep_branch=False)
+
+    Worktree.prune_checkpoints(repo, keep=1)
+
+    refs = subprocess.run(
+        ["git", "-C", str(repo), "for-each-ref", "--format=%(refname)",
+         f"{CHECKPOINT_REF_PREFIX}*"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    assert len(refs) == 1
