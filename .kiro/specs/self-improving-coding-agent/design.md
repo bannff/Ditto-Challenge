@@ -179,5 +179,3 @@ Pydantic v2, validated at every boundary; `schema_version` real and active.
   didn't go well changing later behavior).
 - **Quality gates** — `ruff check` (zero warnings), `pyright` (zero errors), `pytest` +
   Hypothesis green, run before every commit and in CI.
-- **Eval SOP (optional artifact)** — run once near the end to emit a committed `eval/`
-  folder as evidence of rigorous evaluation; advisory recommendations only.

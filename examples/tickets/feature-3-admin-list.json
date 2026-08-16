@@ -1,0 +1,7 @@
+{
+  "id": "feature-3-admin-list",
+  "repository": ".",
+  "request": "Add an admin-only endpoint GET /orders/all that returns every order in the store. It must be restricted to admin users: a non-admin caller gets 403, and an unauthenticated caller gets 401. tests/test_admin_feature.py specifies the expected behavior; implement the route and any service method it needs so that test passes, and keep the existing tests green. Note how existing routes are matched in api.py when adding the new one.",
+  "domain": "feature",
+  "acceptance_command": "pytest tests/test_admin_feature.py"
+}

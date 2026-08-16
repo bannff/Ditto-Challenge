@@ -7,6 +7,8 @@ a thin tool bound to this same instance instead.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mem0 import Memory
 from strands import tool
 
@@ -17,7 +19,7 @@ from .settings import aws_credentials, get_settings
 USER_ID = "autodev"
 
 
-def _config() -> dict:
+def _config(store_dir: Path) -> dict:
     s = get_settings()
     creds = aws_credentials()
     return {
@@ -37,25 +39,33 @@ def _config() -> dict:
             "provider": "faiss",
             "config": {
                 "collection_name": "lessons",
-                "path": str(s.mem0_dir),
+                "path": str(store_dir),
                 "embedding_model_dims": s.bedrock_embed_dims,
                 "distance_strategy": "cosine",
             },
         },
-        "history_db_path": str(s.mem0_dir / "history.db"),
+        "history_db_path": str(store_dir / "history.db"),
     }
 
 
 class LessonMemory:
-    def __init__(self) -> None:
-        get_settings().mem0_dir.mkdir(parents=True, exist_ok=True)
-        self._m = Memory.from_config(_config())
+    def __init__(self, storage_dir: Path | None = None) -> None:
+        store_dir = storage_dir or get_settings().mem0_dir
+        store_dir.mkdir(parents=True, exist_ok=True)
+        self._m = Memory.from_config(_config(store_dir))
 
     def store(self, lesson: Lesson) -> None:
         # Store both outcomes, verbatim (the Learn node already distilled the text) and
         # scrubbed. infer=False keeps it deterministic and skips an extra Bedrock call.
+        content = scrub_text(lesson.content)
+        # Dedup: a re-run of the same ticket produces a near-identical lesson; don't let
+        # memory accumulate duplicates (junk-resistance).
+        existing = self._m.search(content, filters={"user_id": USER_ID}, limit=1)
+        hits = existing.get("results", []) if isinstance(existing, dict) else (existing or [])
+        if hits and (hits[0].get("score") or 0) >= 0.95:
+            return
         self._m.add(
-            scrub_text(lesson.content),
+            content,
             user_id=USER_ID,
             infer=False,
             metadata={

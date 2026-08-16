@@ -18,6 +18,7 @@ class Outcome(StrEnum):
     SUCCESS = "success"
     FAILURE = "failure"
     INCONCLUSIVE = "inconclusive"
+    REFUSED = "refused"
 
 
 class NodeState(StrEnum):
@@ -43,6 +44,7 @@ class EvaluatorScore(BaseModel):
     threshold: float
     passed: bool
     reason: str = ""
+    gating: bool = True  # False = informational only; recorded but can't fail the node
 
 
 class Verdict(BaseModel):

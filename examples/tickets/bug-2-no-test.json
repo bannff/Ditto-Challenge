@@ -1,0 +1,7 @@
+{
+  "id": "bug-2-no-test",
+  "repository": ".",
+  "request": "Inventory.total_value() reports the wrong number: it sums each item's unit_price but ignores the quantity on hand, so ten widgets at $2.50 are valued at $2.50 instead of $25.00. Total value should be the sum of quantity * unit_price across all items. Fix total_value and add a regression test covering it. Do not break the existing tests in tests/test_inventory.py.",
+  "domain": "bugfix",
+  "acceptance_command": "pytest tests/test_inventory.py"
+}

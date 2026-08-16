@@ -1,0 +1,7 @@
+{
+  "id": "feature-1-acceptance-test",
+  "repository": ".",
+  "request": "Add a method Inventory.total_quantity() that returns the total number of units on hand across all items (the sum of every item's quantity), returning 0 for an empty inventory. tests/test_new_feature.py already specifies the expected behavior; implement total_quantity so that test passes.",
+  "domain": "feature",
+  "acceptance_command": "pytest tests/test_new_feature.py"
+}

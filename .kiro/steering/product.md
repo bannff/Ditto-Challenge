@@ -7,8 +7,8 @@ classify (bug / feature / refuse), understand the repo, act on an isolated branc
 result (what it did, diff, test output, plain-English summary), and learn a durable lesson
 that measurably changes later runs.
 
-Source of truth: `Reqs.md` (the challenge) and `SPEC.md` (the v3 build plan). This file is
-the quick-reference; when they conflict, `Reqs.md` wins on *what's graded*.
+Source of truth: `Reqs.md` (the challenge, kept local). This file is the quick-reference;
+when they conflict, `Reqs.md` wins on *what's graded*.
 
 **What actually gets graded (weight it accordingly):**
 
