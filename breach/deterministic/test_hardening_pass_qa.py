@@ -38,7 +38,7 @@ from test_hostile_tickets import (  # the shared harness lives next door
 from self_improving_coding_agent.acceptance_policy import normalize, resolve
 from self_improving_coding_agent.contracts import Outcome
 from self_improving_coding_agent.settings import get_settings
-from self_improving_coding_agent.worktree import Worktree
+from self_improving_coding_agent.worktree import Worktree, WorktreeError
 
 TMP = Path(get_settings().worktrees_dir).parent
 
@@ -82,12 +82,24 @@ def test_a_gate_that_could_never_fail_is_refused_before_any_spend(repo: Path, tm
     _assert_target_untouched(repo, head, branch)
 
 
-def test_forced_args_are_always_ours_and_always_first():
-    for command in ("pytest", "pytest -q tests", "python3 -m pytest -x tests/test_idor.py",
-                    "pytest --tb -o addopts=--co", "pytest -k -o addopts=--co"):
+FORCED_PREFIX = ["pytest", "-o", "addopts=", "-o", "testpaths=", "-p", "no:cacheprovider"]
+
+
+def test_forced_args_are_always_ours_and_always_first(tmp_path: Path):
+    # Everything that decides what runs is pinned by us, ahead of anything the ticket said,
+    # and the jail-relative pins are rendered from the resolved worktree root.
+    for command in ("pytest", "pytest -q tests", "python3 -m pytest -x tests/test_idor.py"):
         argv = resolve(normalize(shlex.split(command)), in_jail=None)
-        assert argv[:3] == ["pytest", "-o", "addopts="], argv
-        assert argv.count("-o") == 1 or argv[3:].count("-o") == 0 or "addopts=" in argv[2]
+        assert argv[:len(FORCED_PREFIX)] == FORCED_PREFIX, argv
+        assert "-o" not in argv[len(FORCED_PREFIX):], argv
+
+    jail = tmp_path / "wt"
+    jail.mkdir()
+    argv = resolve(["pytest", "-q"], in_jail=jail)
+    resolved = str(jail.resolve())
+    assert argv[:len(FORCED_PREFIX)] == FORCED_PREFIX
+    assert f"--rootdir={resolved}" in argv and f"--confcutdir={resolved}" in argv
+    assert argv[-1] == "-q", "the ticket's own args stay last"
 
 
 @pytest.mark.parametrize(("name", "content"), [
@@ -110,15 +122,15 @@ def test_forced_addopts_neutralises_repo_resident_ini_config(repo: Path, tmp_pat
 
 
 @pytest.mark.parametrize("gate", ["pytest --tb -o addopts=--co", "pytest -k -o addopts=--co"])
-def test_a_smuggled_dash_o_cannot_reach_pytest_as_a_flag(repo: Path, tmp_path: Path,  # noqa: F811
-                                                         gate: str):
-    """`-o` can be smuggled past validation as the *value* of an allowed valued flag, so
-    check the thing that matters: it never takes effect, and the gate fails closed."""
+def test_a_smuggled_dash_o_never_reaches_pytest(repo: Path, tmp_path: Path, gate: str):  # noqa: F811
+    """`-o` can be slipped into the *value* slot of an allowed valued flag. The leftover
+    `addopts=--co` is then a positional, and a positional has to look like a test path — so
+    the command is refused outright rather than relying on the runner to fail it."""
     wt = _worktree(repo, tmp_path, f"smuggle-{abs(hash(gate)) % 10**6}")
     try:
         (wt.root / "pytest.ini").write_text("[pytest]\naddopts = --co\n")
-        r = wt.run_acceptance(gate, timeout=120)
-        assert r.exit_code != 0, f"a smuggled -o produced a green gate: {r.output[-300:]}"
+        with pytest.raises(WorktreeError):
+            wt.run_acceptance(gate, timeout=120)
     finally:
         wt.remove()
 

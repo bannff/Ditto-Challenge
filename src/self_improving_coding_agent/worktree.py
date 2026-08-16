@@ -17,21 +17,54 @@ import shutil
 import signal
 import subprocess
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from .acceptance_policy import POLICIES, AcceptanceRejected, normalize, resolve
+from .acceptance_policy import (
+    POLICIES,
+    PYTEST_CONFIG_FILES,
+    AcceptanceRejected,
+    normalize,
+    resolve,
+)
 
 BRANCH_PREFIX = "autodev/"
 
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
-# Disable anything in a target repo that turns a plain git command into code execution.
+# Disable anything in a target repo that turns a plain git command into code execution or
+# makes our own evidence lie. `-c` cannot wildcard a subsection, so `filter.<name>.clean` and
+# `diff.<name>.textconv` — both run through /bin/sh — are unreachable from here. They are
+# closed by denying writes to the config instead: `.git` is refused at the tool layer
+# (_DENIED_COMPONENTS) and every in-worktree git call pins --git-dir/--work-tree, so a
+# clobbered gitdir pointer is inert and core.worktree cannot re-aim `clean -fd`.
 _GIT_HARDENING = [
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.fsmonitor=",
     "-c", "protocol.ext.allow=never",
+    "-c", "core.excludesFile=/dev/null",
+    "-c", "core.attributesFile=/dev/null",
 ]
+
+# Path components the file tools never touch, whatever the containment check says. `.git` is
+# the repo's control plane, not source: in a linked worktree it is a *file* (the gitdir
+# pointer), so one in-jail write redirects every later git command at a repo whose config the
+# agent wrote — and git config executes filter/textconv commands through /bin/sh.
+_DENIED_COMPONENTS = frozenset({".git"})
+
+
+def _fold_component(component: str) -> str:
+    """Normalise one path component to the form the filesystem will match on.
+
+    `Path.resolve()` preserves the spelling as typed, but APFS and NTFS are
+    case-insensitive, so `.GIT/config` opens `.git/config` (verified). Unicode format
+    characters are dropped and trailing dots/spaces stripped because HFS+ ignores the former
+    and Windows strips the latter — both make `.git` reachable under another name.
+    """
+    stripped = "".join(c for c in component if unicodedata.category(c) != "Cf")
+    return unicodedata.normalize("NFC", stripped).rstrip(". ").casefold()
+
 
 # Which runners, flags and paths an acceptance command may use lives in acceptance_policy
 # as data. ACCEPTANCE_ALLOWLIST stays as the set of permitted runners for callers that only
@@ -127,9 +160,24 @@ class CommandResult:
         return self.exit_code == 0
 
 
-def _git(repo: Path, *args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+def _git(
+    repo: Path,
+    *args: str,
+    git_dir: Path | None = None,
+    work_tree: Path | None = None,
+    timeout: int = 60,
+) -> subprocess.CompletedProcess[str]:
+    """Run git with the hardening flags, optionally pinned to a known gitdir/work tree.
+
+    Pinning is how a repository stops being discovered from inside the jail: with
+    --git-dir given, `<root>/.git` is never read, and --work-tree on the command line
+    outranks any `core.worktree` in config. Paths are absolute so `-C` cannot re-root them.
+    """
+    pinned = [f"--git-dir={git_dir}"] if git_dir else []
+    if work_tree:
+        pinned.append(f"--work-tree={work_tree}")
     return subprocess.run(
-        ["git", *_GIT_HARDENING, "-C", str(repo), *args],
+        ["git", *_GIT_HARDENING, *pinned, "-C", str(repo), *args],
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -143,9 +191,25 @@ class Worktree:
         self.repo = repo
         self.root = root.resolve()
         self.branch = branch
+        # The real gitdir, read once before the agent has touched anything, and used on every
+        # later call instead of re-discovering it through `<root>/.git`. For a linked worktree
+        # it lives under the target repo, outside the jail, so no file tool can reach it.
+        self._git_dir = self._discover_git_dir()
         # A HOME of this run's own, so gate code can't plant a file under HOME that a later
         # run would import (e.g. usercustomize.py). Removed with the worktree.
         self._home = tempfile.mkdtemp(prefix="autodev_run_home_")
+
+    def _discover_git_dir(self) -> Path:
+        r = _git(self.root, "rev-parse", "--absolute-git-dir")
+        gitdir = r.stdout.strip()
+        if r.returncode != 0 or not gitdir:
+            raise WorktreeError(f"cannot resolve the gitdir for {self.root}: {r.stderr.strip()}")
+        return Path(gitdir)
+
+    def _wt_git(self, *args: str, timeout: int = 60) -> subprocess.CompletedProcess[str]:
+        return _git(
+            self.root, *args, git_dir=self._git_dir, work_tree=self.root, timeout=timeout
+        )
 
     @classmethod
     def create(cls, repo: Path | str, run_id: str, base_dir: Path) -> Worktree:
@@ -174,6 +238,9 @@ class Worktree:
         resolved = base.resolve()
         if resolved != self.root and self.root not in resolved.parents:
             raise WorktreeEscape(f"path escapes worktree: {path}")
+        for part in resolved.relative_to(self.root).parts:
+            if _fold_component(part) in _DENIED_COMPONENTS:
+                raise WorktreeEscape(f"path is git metadata, not source: {path}")
         return resolved
 
     def run(self, args: list[str], *, timeout: int = 300) -> CommandResult:
@@ -222,39 +289,67 @@ class Worktree:
         except ValueError as e:
             raise WorktreeError(f"unparseable command: {e}") from e
         try:
-            argv = resolve(normalize(args), in_jail=self.root)
+            argv = resolve(normalize(args), in_jail=self.root, config=self._gate_config())
         except AcceptanceRejected as e:
             raise WorktreeError(f"command not allowed: {command!r} ({e})") from e
         return self.run(argv, timeout=timeout)
 
+    def _gate_config(self) -> Path:
+        """The config file the gate runs with: the target's own, or an empty one we own.
+
+        Pinning it stops pytest walking up past the worktree and adopting a directory above
+        the jail as its config — an ancestor ini needs only a `pythonpath` line to put
+        attacker-chosen directories on `sys.path` for the run.
+        """
+        for name, marker in PYTEST_CONFIG_FILES:
+            candidate = self.root / name
+            if not candidate.is_file():
+                continue
+            if marker is None or marker in candidate.read_text(errors="replace"):
+                return candidate
+        empty = Path(self._home) / "gate-pytest.ini"
+        if not empty.exists():
+            empty.write_text("[pytest]\n")
+        return empty
+
     def is_clean(self) -> bool:
-        r = _git(self.root, "status", "--porcelain")
+        r = self._wt_git("status", "--porcelain")
         return r.returncode == 0 and r.stdout.strip() == ""
 
     def diff(self) -> str:
-        return _git(self.root, "diff", "HEAD").stdout
+        return self._wt_git("diff", "HEAD").stdout
 
     def head_hash(self) -> str | None:
         """The commit this worktree points at. Recorded in ledger blocks so the chain
         references real, restorable state instead of keeping its own copy of it."""
-        r = _git(self.root, "rev-parse", "HEAD")
+        r = self._wt_git("rev-parse", "HEAD")
         return (r.stdout.strip() or None) if r.returncode == 0 else None
 
     def commit(self, message: str) -> bool:
         """Commit all changes to the run branch. Returns False if there was nothing to commit."""
         if self.is_clean():
             return False
-        _git(self.root, "add", "-A")
-        return _git(self.root, "commit", "-m", message).returncode == 0
+        # A failed `add` must not fall through to a commit that ships a partial change: an
+        # embedded git repo in the tree, for instance, makes `add -A` fatal (verified).
+        if self._wt_git("add", "-A").returncode != 0:
+            return False
+        return self._wt_git("commit", "-m", message).returncode == 0
 
     def revert(self) -> None:
         """Discard all changes (tracked and untracked) — leaves the working tree clean."""
-        _git(self.root, "reset", "--hard", "HEAD")
-        _git(self.root, "clean", "-fd")
+        self._wt_git("reset", "--hard", "HEAD")
+        self._wt_git("clean", "-fd")
 
     def remove(self, *, keep_branch: bool = False) -> None:
         shutil.rmtree(self._home, ignore_errors=True)  # this run's HOME goes with it
         rm = _git(self.repo, "worktree", "remove", "--force", str(self.root))
+        if rm.returncode != 0 and self.root.exists():
+            # `worktree remove` refuses when `<root>/.git` no longer points back at the gitdir.
+            # The agent can't write that file, but gate code runs as our uid and can, and
+            # cleanup has to succeed either way. Restore the pointer we recorded and retry.
+            with contextlib.suppress(OSError):
+                (self.root / ".git").write_text(f"gitdir: {self._git_dir}\n")
+            rm = _git(self.repo, "worktree", "remove", "--force", str(self.root))
         if not keep_branch:
             _git(self.repo, "branch", "-D", self.branch)
         _git(self.repo, "worktree", "prune")
