@@ -25,5 +25,6 @@ wheels/
 scratch/
 demos/
 
-# Challenge prompt — kept local, not published
+# Challenge prompt and working spec — kept local, not published
 Reqs.md
+SPEC.md
