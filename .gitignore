@@ -20,3 +20,10 @@ wheels/
 .mem0/
 .sessions/
 .worktrees/
+
+# Local experiments and generated run bundles
+scratch/
+demos/
+
+# Challenge prompt — kept local, not published
+Reqs.md

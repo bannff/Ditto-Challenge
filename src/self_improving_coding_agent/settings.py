@@ -6,6 +6,7 @@ values in this file. If a true secret is ever added, wrap it in pydantic.SecretS
 
 from __future__ import annotations
 
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,13 +32,24 @@ class Settings(BaseSettings):
     bedrock_embed_model_id: str
     aws_region: str
     bedrock_reviewer_model_id: str | None = None
+    bedrock_third_model_id: str | None = None
     bedrock_embed_dims: int = 1024
     aws_profile: str = "default"
     data_dir: Path = Field(default=Path(".data"))
+    # Worktrees live OUTSIDE this repo, and the default is absolute: a test runner walks up
+    # from its rootdir looking for config, so a worktree under our own tree would let the
+    # gate load this project's pyproject/conftest instead of the target's.
+    worktrees_dir: Path = Field(default=Path(tempfile.gettempdir()) / "autodev-worktrees")
 
     @property
     def reviewer_model_id(self) -> str:
         return self.bedrock_reviewer_model_id or self.bedrock_model_id
+
+    @property
+    def third_model_id(self) -> str:
+        # The third voice in the multi-family swarm. Falls back to the reviewer, then the
+        # builder, so the trio degrades to a pair (or a solo) without extra config.
+        return self.bedrock_third_model_id or self.reviewer_model_id
 
     @property
     def ledger_db(self) -> Path:
@@ -54,10 +66,6 @@ class Settings(BaseSettings):
     @property
     def sessions_dir(self) -> Path:
         return self.data_dir / "sessions"
-
-    @property
-    def worktrees_dir(self) -> Path:
-        return self.data_dir / "worktrees"
 
     def ensure_dirs(self) -> None:
         for p in (self.chroma_dir, self.mem0_dir, self.sessions_dir, self.worktrees_dir):
@@ -91,15 +99,30 @@ def aws_credentials() -> dict[str, str]:
 
 
 def build_model(
-    model_id: str | None = None, *, temperature: float = 0.2, max_tokens: int = 4096
+    model_id: str | None = None,
+    *,
+    temperature: float | None = 0.2,
+    max_tokens: int = 4096,
+    streaming: bool = True,
 ) -> BedrockModel:
     s = get_settings()
+    mid = model_id or s.bedrock_model_id
+    # temperature=None omits the param entirely — newer models (claude-sonnet-5) reject it.
+    if temperature is None:
+        return BedrockModel(
+            model_id=mid,
+            boto_session=_session(),
+            boto_client_config=_BOTO_CONFIG,
+            max_tokens=max_tokens,
+            streaming=streaming,
+        )
     return BedrockModel(
-        model_id=model_id or s.bedrock_model_id,
+        model_id=mid,
         boto_session=_session(),
         boto_client_config=_BOTO_CONFIG,
         temperature=temperature,
         max_tokens=max_tokens,
+        streaming=streaming,
     )
 
 

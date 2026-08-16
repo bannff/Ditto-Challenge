@@ -60,11 +60,16 @@ Each node is a `Swarm`. Set the bounds explicitly per node — they are the circ
 breaker, not just tuning:
 
 ```python
-Swarm(agents=[...], max_handoffs=..., max_iterations=..., execution_timeout=...)
+# nodes is the first positional arg (a list[Agent]) — NOT a keyword `agents=`.
+Swarm([...], entry_point=..., max_handoffs=..., max_iterations=...,
+      execution_timeout=..., node_timeout=..., session_manager=...)
 ```
 
-Lesson from the prior build: default bounds of 6/6 caused false `INCONCLUSIVE` results
-on a thorough verifier. Tune up for nodes doing real multi-step work.
+Verified defaults: `max_handoffs=20`, `max_iterations=20`, `execution_timeout=900.0`,
+`node_timeout=300.0`. Set `node_timeout` explicitly too — it bounds a single agent step.
+`session_manager=` goes on the Swarm (agents must NOT carry their own). Tune the bounds up
+for nodes doing real multi-step work (default 6/6 caused false `INCONCLUSIVE` in the prior
+build).
 
 ## Evals — LLM-as-judge checkpoints
 

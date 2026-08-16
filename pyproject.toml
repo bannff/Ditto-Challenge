@@ -10,8 +10,8 @@ requires-python = ">=3.12"
 dependencies = [
     "chromadb>=1.5.9",
     "faiss-cpu>=1.15.0",
+    "mcp>=1.29.0",
     "mem0ai>=2.0.18",
-    "opensearch-py>=3.2.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.2",
@@ -22,7 +22,8 @@ dependencies = [
 ]
 
 [project.scripts]
-self-improving-coding-agent = "self_improving_coding_agent:main"
+autodev = "self_improving_coding_agent.cli:main"
+autodev-mcp = "self_improving_coding_agent.server:main"
 
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
@@ -44,7 +45,9 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "scripts"]
+# scripts/ isn't a package, so imports of it (the demo, from its test) resolve via path.
+extraPaths = ["scripts"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 venvPath = "."

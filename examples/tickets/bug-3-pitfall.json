@@ -1,0 +1,7 @@
+{
+  "id": "bug-3-pitfall",
+  "repository": ".",
+  "request": "Inventory.needs_reorder(threshold) has the same off-by-one as low_stock: items whose quantity sits exactly on the threshold are dropped. Fix the boundary so it is inclusive. tests/test_reorder.py covers the expected behavior.",
+  "domain": "bugfix",
+  "acceptance_command": "pytest tests/test_reorder.py"
+}

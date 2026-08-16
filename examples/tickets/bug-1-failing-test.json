@@ -1,0 +1,7 @@
+{
+  "id": "bug-1-failing-test",
+  "repository": ".",
+  "request": "Inventory.low_stock(threshold) is meant to return every item at or below the threshold, but items whose quantity sits exactly on the threshold are being left out. A threshold of 5 should include an item with quantity 5. tests/test_bug_repro.py reproduces the off-by-one. Fix low_stock so the boundary is inclusive and make that test pass.",
+  "domain": "bugfix",
+  "acceptance_command": "pytest tests/test_bug_repro.py"
+}

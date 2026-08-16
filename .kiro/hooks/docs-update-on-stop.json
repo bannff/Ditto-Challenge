@@ -8,7 +8,8 @@
       "action": {
         "type": "agent",
         "prompt": "Review the changes made in this session and update documentation so it stays accurate. Specifically:\n- If public behavior, setup steps, env vars, commands, or architecture changed, update README.md and DESIGN.md (if present) to match.\n- Keep documentation lean and human-sounding per the dev-best-practices steering — no narrating comments, no meta-commentary, document the why when it isn't obvious.\n- Do NOT create new doc files unless a documented surface genuinely needs one. Do NOT restate the code.\n- If nothing user-facing changed, make no edits and say so briefly.\nOnly touch docs; do not change source or tests in this pass."
-      }
+      },
+      "enabled": false
     }
   ]
 }

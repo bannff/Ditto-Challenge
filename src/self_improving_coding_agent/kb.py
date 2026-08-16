@@ -41,9 +41,6 @@ class PolicyKB:
         res = self._col.query(query_texts=[text], n_results=min(n, count))
         return res["documents"][0] if res["documents"] else []
 
-    def add_policy(self, text: str) -> None:
-        self._col.add(ids=[f"p{self._col.count()}"], documents=[text])
-
 
 def make_query_policy_tool(kb: PolicyKB):
     @tool

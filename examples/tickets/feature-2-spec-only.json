@@ -1,0 +1,7 @@
+{
+  "id": "feature-2-spec-only",
+  "repository": ".",
+  "request": "Add a method Inventory.top_items(n) that returns the n most valuable items on hand, ordered from highest to lowest line value (quantity * unit_price), breaking ties by SKU. If n exceeds the number of items, return them all; if n <= 0, return an empty list. Add tests for the new method and keep the existing tests in tests/test_inventory.py green.",
+  "domain": "feature",
+  "acceptance_command": "pytest tests/test_inventory.py"
+}
