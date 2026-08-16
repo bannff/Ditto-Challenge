@@ -54,5 +54,9 @@ venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# breach/deterministic is in the default run on purpose: it is keyless and offline, and it
+# holds the tests that prove a hostile ticket cannot escape the jail or disable the gate. Left
+# out, `uv run pytest` reported a green wall that had exercised none of it. The two adversarial
+# layers that need Bedrock stay out — they are scripts, not tests (see breach/README.md).
+testpaths = ["tests", "breach/deterministic"]
 addopts = "-q"

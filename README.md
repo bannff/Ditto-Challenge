@@ -153,7 +153,9 @@ Ticket text and repository content are untrusted. The enforced boundary uses exp
 a worktree jail, shell-free acceptance-command parsing, stripped credentials, an isolated
 `HOME`, and bounded process groups. Only the platform's green acceptance gate can resolve a
 change; all other outcomes revert and leave the working tree clean. Runs are bounded by
-handoffs, iterations, timeouts, and token budgets.
+handoffs, iterations, per-node and whole-run wall clock, and the size of what a run may read,
+write, or commit. There is no cumulative *token* ceiling — a production version should add
+one, since wall clock is a loose proxy for spend.
 
 This is worktree confinement and credential isolation, not an operating-system filesystem
 or egress sandbox. Production execution should use a no-egress container or microVM with
@@ -166,6 +168,32 @@ uv run ruff check src tests scripts
 uv run pyright
 uv run pytest
 ```
+
+That last command runs the unit tests *and* the deterministic adversarial suite, about three
+minutes in total. Both need to be in the default run: the adversarial half is what actually
+proves the boundary holds, and it costs nothing to run because it needs no model and no AWS
+credentials.
+
+## Adversarial testing
+
+The trust boundary is attacked at three levels, cheapest and most authoritative first.
+
+| Layer | What it proves | Cost | Command |
+|---|---|---|---|
+| Deterministic | A hostile ticket cannot escape the jail, disable the gate, or leave a dirty tree | Free, keyless, seconds | included in `uv run pytest` |
+| Red team | An adaptive LLM attacker cannot talk the swarm past its tool boundary | Real Bedrock, minutes | `uv run python breach/redteam_run.py` |
+| Chaos | The loop degrades safely when its own tools fail mid-change | Real Bedrock, minutes | `uv run python breach/chaos_run.py` |
+
+The deterministic layer drives `run_ticket()` end to end with hostile tickets and asserts the
+invariants in code rather than asking a model whether they held: nothing written outside the
+worktree, `main` untouched, a clean tree after a failed gate, refusal on unsafe input. Several
+of its tests are `xfail(strict=True)` — each encodes a property the code does *not* yet hold,
+so it turns into a failure the moment the hole closes, which is the signal to delete the marker.
+
+Red team and chaos use the Strands evals SDK (`strands_evals.experimental.redteam` and
+`strands_evals.chaos`) against the real Implement swarm, the node that holds the write tools.
+They need credentials, so they are scripts rather than tests. Both write their transcript to
+`scratch/`. `breach/README.md` has the detail.
 
 `DESIGN.md` explains the control flow, learning policy, and deliberate production-scale
 cuts. `demos/README.md` is the reviewer guide for generated artifacts.
