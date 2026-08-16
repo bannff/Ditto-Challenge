@@ -17,14 +17,18 @@ verified; they stay on the list so the history is legible. Every item has a test
 4. ~~**#3 regression: a shipped ticket is refused**~~ — done, and it was the largest of these:
    the rewrite surfaced nine further defects including two DoS shapes and a bypass of every row
    at once. Residuals recorded as **#17**; **#6** closed by #2's fix.
-5. **#2c `.gitignore` hides evidence**, **#4 empty PATH**, **#5 predictable worktrees base**,
-   **#7 stray processes** — one-to-three lines each; #4 and #5 were introduced by the last pass.
-   **NEXT: #2c.**
+5. ~~**#2c `.gitignore` hides evidence**~~ — done, plus seven review follow-ups including a full
+   bypass (`:(exclude)` filenames).
 6. ~~**#12 lesson hygiene**~~ — done; surfaced **#12b** (no cumulative token ceiling, and
    DESIGN.md claims one). With #3 also closed, the two artifact-regeneration blockers are clear.
-7. **#8 unbounded output**, **#9 audit gap**, **#10 forgeable output**, **#2d tool crash**,
-   **#12b token ceiling**.
-8. **#11 conftest owns the verdict**, **#13 no FS/egress sandbox** — need design answers, not
+7. ~~**#4 empty PATH**, **#5 predictable worktrees base**, **#7 stray processes**,
+   **#8 unbounded output**, **#2d tool crash**~~ — done in one pass. Three of the five "obvious"
+   one-liners were wrong as written: `os.defpath` unfiltered re-arms #4, `_kill_group` in a
+   `finally` misses a SIGTERM-ignoring survivor, and `os.open` without a mode ships 0755 files.
+   Also closed most of **#10** en route (the sweep now precedes the sink read).
+8. **#9 audit gap**, **#10 forgeable output** (residual only), **#12b token ceiling**,
+   **#16 DESIGN corrections**.
+9. **#11 conftest owns the verdict**, **#13 no FS/egress sandbox** — need design answers, not
    more argv validation.
 
 ## ~~1. CRITICAL — `pytest @argfile` bypasses the entire flag allowlist~~ FIXED
@@ -157,11 +161,28 @@ every anomaly), the `--ignored=matching` choice over `traditional`, per-source p
 `diff()`/`commit()` ordering, `diff <seed>` being unredirectable, and the write ceiling. Switching
 `is_clean()` on costs 0.04s over an 8000-file ignored `.venv`.
 
-## 2d. LOW (new) — a tool escape crashes instead of refusing
+## ~~2d. LOW — a tool escape crashes instead of refusing~~ FIXED
 
-`write_file("service.py/evil.py")` raises `FileExistsError` out of the tool, contradicting the
-tools.py docstring ("escapes return an error string instead of crashing"). Same class as the
-NUL crash: an unexpected exception type escaping the tool boundary.
+~~`write_file("service.py/evil.py")` raises `FileExistsError` out of the tool, contradicting the
+tools.py docstring ("escapes return an error string instead of crashing").~~ It was one instance
+of a class. Also verified crashing: a NUL in any path (`ValueError` from `resolve()` — the
+acceptance-policy fix never covered the tool path), writing onto a directory
+(`IsADirectoryError`), over a read-only file (`PermissionError`), a name past `NAME_MAX`, reading
+a binary file (`UnicodeDecodeError`), and listing an unreadable directory.
+**Fixed** with one `_refuses` decorator per tool rather than a `try` per call — the answer is
+identical for all of them and near-duplicate handlers drift. The caught set is an explicit tuple
+and deliberately **not** `Exception`: swallowing everything would turn our own bugs into a
+plausible refusal string the model retries against, and hide them from the ledger. The exception
+type is in the message so a real defect reads like one.
+Two more found while fixing it, both closed: `write_file` to a FIFO **blocked forever** (before
+raising, so no handler caught it, and `write_file` has no timeout) — now `O_NOFOLLOW|O_NONBLOCK`
+plus an `S_ISREG` check, which also closes a symlink swapped in between `safe_path` and the write;
+and `read_file` had no size ceiling, so a large file the gate dropped in the jail went straight
+into the model's context — now `MAX_READ_BYTES`.
+One regression caught in review before landing: `os.open` with `O_CREAT` and no mode argument
+creates 0755, so every file the agent wrote would have been committed `100755` into the target's
+history. Mode is now explicit, and truncation happens after the type check rather than via
+`O_TRUNC`.
 
 ## ~~3. REGRESSION — a legitimate shipped ticket is refused, and it breaks a demo~~ FIXED
 
@@ -202,15 +223,20 @@ security-engineer and once by qa-tester; every string they supplied is in the co
 
 **Accepted residuals:** see #17.
 
-## 4. MEDIUM — the absolute-only PATH filter can empty PATH, which means "exec from cwd"
+## ~~4. MEDIUM — the absolute-only PATH filter can empty PATH, which means "exec from cwd"~~ FIXED
 
 `_safe_path_entries()` returns `""` when the parent PATH is unset or wholly relative;
 `subprocess` then resolves the runner against **cwd** — the worktree. Verified: a planted
 `./pytest` executed. Re-arms the exact hole the filter was added to close (`env -i`, container
 entrypoints, systemd units). Introduced by the last pass.
-**Fix:** `… or os.defpath`; ideally `shutil.which` in the parent and exec an absolute path.
+**Fixed:** the *fallback is filtered too*, not used raw. `os.defpath` is `/bin:/usr/bin` here but
+has historically been `:/bin:/usr/bin` — a leading empty entry, i.e. cwd — so the obvious
+one-liner would have re-armed the same hole on a platform where that literal differs.
+`shutil.which`-in-parent was considered and rejected: it resolves to the *same* path the child
+would pick, so it buys nothing, and baking an absolute host path into the recorded argv would
+collide with #9. It does **not** fix #15 (venv vs host pytest) — that needs its own decision.
 
-## 5. MEDIUM (HIGH on Linux) — predictable worktrees base, adopted even if symlinked
+## ~~5. MEDIUM (HIGH on Linux) — predictable worktrees base, adopted even if symlinked~~ FIXED
 
 `$TMPDIR/autodev-worktrees` is per-user 0700 on macOS, but with `TMPDIR` unset (Linux, CI,
 containers) it is the fixed path `/tmp/autodev-worktrees` in a world-writable dir.
@@ -219,7 +245,20 @@ never applies a mode to an existing dir), and `Worktree.create` resolves `base_d
 containment check — so a pre-created symlink is silently adopted and every worktree lands where
 an attacker chose: a write foothold in the tree the gate executes. `.data/worktrees` had none of
 this. Introduced by the last pass.
-**Fix:** uid in the name, create `mode=0o700`, refuse a base that is a symlink or not ours.
+**Fixed:** new `_private_base()`, called from `Worktree.create` *before* `resolve()` — resolving
+first follows the symlink and then measures the attacker's directory. `lstat` (so a symlink fails
+the is-a-directory test), create with `mode=0o700` and **no** `exist_ok` (losing the race means
+refusing, not adopting), then verify uid and that no other-bits are set. Refuse, never repair:
+`chmod`-ing someone else's directory adopts whatever is already inside it, and
+`mkdir(mode=…, exist_ok=True)` doesn't change an existing mode anyway — so "fixing" it would be a
+no-op that reads like a fix. The uid is in the *default* name only; an explicit `WORKTREES_DIR` is
+honoured verbatim but still vetted, because the check is a property of the directory, not of
+intent. `ensure_dirs()` no longer creates it — doing so under the ambient umask would make it 0755
+and every run would then correctly refuse its own base.
+**Migration:** an existing `WORKTREES_DIR` (or the old un-suffixed default) sitting at 0755 will
+now be refused with a clear message; `chmod 700` it.
+**Residual:** lstat-then-use is still TOCTOU; what closes it in practice is the sticky bit on
+`/tmp` plus a name nobody else can guess.
 
 ## ~~6. MEDIUM — the shared git HOME lets gate code make `is_clean()` lie~~ FIXED (with #2)
 
@@ -231,20 +270,39 @@ True with an untracked file present — so the diff omits attacker files, `git a
 **Fix:** add `core.excludesFile=/dev/null` and `core.attributesFile=/dev/null` to
 `_GIT_HARDENING` (verified).
 
-## 7. MEDIUM — a gate that exits cleanly leaves its spawned processes running
+## ~~7. MEDIUM — a gate that exits cleanly leaves its spawned processes running~~ FIXED
 
 `_kill_group` runs only on `TimeoutExpired`, so a suite that starts a background helper and
 returns 0 leaves it alive indefinitely, after the run is reported done. Broader than the known
 `setsid` escape: no setsid, no timeout needed.
-**Fix:** call `_kill_group` in a `finally` on every path.
+**Fixed, but not the way this said** — `_kill_group` in a `finally` is *insufficient*. It waits on
+the child, and a reaped child returns from `wait()` immediately, so it sends SIGTERM and returns
+while a grandchild that ignores SIGTERM lives on (verified). New `_sweep_group` polls the *group*
+(`killpg(pid, 0)` every 50ms for 0.5s) before escalating to SIGKILL, and runs in a `finally`.
+Two things that ordering buys: the sweep happens **before** the sink is read, closing the window
+in which a survivor holding the inherited write fd rewrites the evidence (part of #10); and a
+`BaseException` arm covers **Ctrl-C**, where `start_new_session` means the terminal's SIGINT never
+reaches the child and the whole gate tree would otherwise keep running after we unwound. An empty
+group costs microseconds, so a clean run is unaffected (measured 0.07s).
 
-## 8. MEDIUM — gate output is unbounded
+## ~~8. MEDIUM — gate output is unbounded~~ FIXED
 
 `run()` reads the whole temp file into one string; only `output[-2000:]` is ever used. Verified:
 a gate emitting ~300MB produced a 300M-character string. The `TemporaryFile` change fixed the
 hang but moved the unbounded read onto disk as well as memory, and "bounded runs" is a hard
 requirement.
-**Fix:** seek to the last ~64KB instead of reading whole; optionally `RLIMIT_FSIZE`.
+**Fixed:** the sink is now a *binary* `TemporaryFile` (a text stream refuses the end-relative
+seek this needs) and `_read_excerpt` keeps head 4KB + tail 60KB with the dropped byte count
+announced between them. Both ends, because each carries something the other doesn't: the tail has
+pytest's verdict and the failing assertions, the head has `rootdir`/plugins/`collected N`, which
+is what tells a reader the gate ran the thing it was meant to. `decode(errors="replace")` is what
+makes an arbitrary byte offset safe — landing mid-codepoint costs one `U+FFFD`. 64KB is ~32x the
+only consumer (`output_tail=r.output[-2000:]`), not a guess.
+`RLIMIT_FSIZE` **rejected**: it needs `preexec_fn`, which runs post-fork in a threaded async
+process — a documented deadlock hazard — and setting it in the parent instead would apply the
+limit to us and let `SIGXFSZ` kill a concurrent ledger write.
+**Residual:** a gate can still fill the temp filesystem within its 300s wall-clock. Our *read* is
+bounded, which was the requirement.
 
 ## 9. LOW — the recorded command doesn't reproduce the verdict
 
