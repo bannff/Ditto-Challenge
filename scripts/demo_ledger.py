@@ -43,7 +43,7 @@ from self_improving_coding_agent.ledger import Ledger
 from self_improving_coding_agent.recorder import RunRecorder, _record_args
 from self_improving_coding_agent.recover import plan_recovery
 from self_improving_coding_agent.settings import get_settings
-from self_improving_coding_agent.worktree import Worktree
+from self_improving_coding_agent.worktree import BRANCH_PREFIX, Worktree
 
 GIT_HASH = "4f2c8a1b9e7d3c5a6b8f0d2e4a6c8e0b2d4f6a8c"
 
@@ -364,13 +364,23 @@ def _containment_check(temp_base: Path) -> None:
         check=False,
     ).stdout.splitlines()
 
+    # What leaked, not how many worktrees exist. A contributor checking out a second branch
+    # under .worktrees/ is ordinary, and counting rows made this assert fail on their setup
+    # while saying "the demo left a worktree" — blaming the demo for someone else's checkout.
+    # The demo's own worktrees are the ones on an autodev branch or under its temp base.
+    leaked = [
+        line
+        for line in worktrees
+        if f"[{BRANCH_PREFIX}" in line or str(temp_base) in line
+    ]
+
     print(f"\n  this repo's refs/autodev/*        {refs or 'none — nothing was written here'}")
-    print(f"  this repo's extra worktrees      {len(worktrees) - 1}")
+    print(f"  this repo's leaked worktrees     {leaked or 'none — all were removed'}")
     print(f"  configured worktrees dir used    no (demo used {temp_base / 'worktrees'})")
     print(f"  real ledger written              no (demo used its own db under {temp_base})")
     print(f"  real ledger path untouched       {settings.ledger_db}")
     assert not refs, "demo leaked a checkpoint ref into this repo"
-    assert len(worktrees) <= 1, "demo left a worktree registered in this repo"
+    assert not leaked, f"demo left a worktree registered in this repo: {leaked}"
     print(
         "\n  Everything above lived in one temp directory that is now gone, so re-running any\n"
         "  other demo is unaffected."
