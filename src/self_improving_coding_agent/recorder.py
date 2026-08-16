@@ -21,9 +21,11 @@ import hashlib
 from typing import Any
 
 from strands.hooks import AfterToolCallEvent, HookProvider, HookRegistry
+from strands.models.model import Model
 
 from .contracts import BlockType, NodeState
 from .ledger import Ledger
+from .model_record import RecordingModel
 
 # Which node lifecycle state becomes which block. Data, not branches.
 _STATE_BLOCKS = {
@@ -73,19 +75,59 @@ def _tool_status(result: Any) -> str | None:
     return None
 
 
-class RunRecorder(HookProvider):
-    """Writes one run's chain. Pass it to `Agent(hooks=[recorder])` for tool calls and
+class NodeToolRecorder(HookProvider):
+    """Records one node's tool calls. Pass to `Agent(hooks=[...])`.
+
+    Node-scoped on purpose: the node name is fixed when this is created, so attribution
+    can't drift. A single recorder with a mutable "current node" would be correct only
+    while nodes run one at a time, and that is not a property worth depending on.
+    """
+
+    def __init__(self, recorder: RunRecorder, node: str) -> None:
+        self._recorder = recorder
+        self._node = node
+
+    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
+        registry.add_callback(AfterToolCallEvent, self._on_tool_call)
+
+    def _on_tool_call(self, event: AfterToolCallEvent) -> None:
+        tool_use = event.tool_use or {}
+        self._recorder.append(
+            BlockType.TOOL_CALL,
+            {
+                "node": self._node,
+                "tool": tool_use.get("name"),
+                "tool_use_id": tool_use.get("toolUseId"),
+                "args": _record_args(tool_use.get("name"), tool_use.get("input")),
+                "status": _tool_status(event.result),
+                "cancelled": event.cancel_message,
+                "error": str(event.exception) if event.exception is not None else None,
+            },
+        )
+
+
+class RunRecorder:
+    """Writes one run's chain. Use `for_node(name)` to get the per-node tool hook, and
     wrap the workflow's status callback with `status_callback()` for node lifecycle."""
 
     def __init__(self, ledger: Ledger, run_id: str) -> None:
         self._ledger = ledger
         self._run_id = run_id
-        # Which node's work a tool call belongs to. Nodes run sequentially in the graph,
-        # so last-started is correct; parallel nodes would need the node id threaded
-        # through invocation_state (same constraint as the shared span buffer).
-        self._node = "unknown"
         self._git_hash: str | None = None
         self.drops = 0
+
+    def for_node(self, node: str) -> NodeToolRecorder:
+        return NodeToolRecorder(self, node)
+
+    def wrap_model(self, inner: Model, node: str, agent: str) -> Model:
+        """Wrap a model so its calls are hashed into the chain. One wrapper per agent, so
+        the call ordinal is per-agent and survives swarm handoffs."""
+        return RecordingModel(
+            inner,
+            lambda payload: self.append(BlockType.MODEL_CALL, payload),
+            node=node,
+            agent=agent,
+        )
 
     @property
     def intact(self) -> bool:
@@ -120,11 +162,13 @@ class RunRecorder(HookProvider):
         block_type = _STATE_BLOCKS.get(NodeState(state)) if state else None
         if block_type is None:
             return
-        node = str(event.get("node", "unknown"))
-        self._node = node
         self.append(
             block_type,
-            {"node": node, "state": str(state), "eval_score": event.get("eval_score")},
+            {
+                "node": str(event.get("node", "unknown")),
+                "state": str(state),
+                "eval_score": event.get("eval_score"),
+            },
         )
 
     def status_callback(self, downstream=None):
@@ -136,23 +180,3 @@ class RunRecorder(HookProvider):
                 downstream(event)
 
         return callback
-
-    # ---- seam 2: tool calls via the SDK hook ------------------------------------
-
-    def register_hooks(self, registry: HookRegistry, **kwargs: Any) -> None:
-        registry.add_callback(AfterToolCallEvent, self._on_tool_call)
-
-    def _on_tool_call(self, event: AfterToolCallEvent) -> None:
-        tool_use = event.tool_use or {}
-        self.append(
-            BlockType.TOOL_CALL,
-            {
-                "node": self._node,
-                "tool": tool_use.get("name"),
-                "tool_use_id": tool_use.get("toolUseId"),
-                "args": _record_args(tool_use.get("name"), tool_use.get("input")),
-                "status": _tool_status(event.result),
-                "cancelled": event.cancel_message,
-                "error": str(event.exception) if event.exception is not None else None,
-            },
-        )

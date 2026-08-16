@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from pathlib import Path
 
+from pydantic import BaseModel
 from strands import Agent
 from strands.models.model import Model
 from strands.vended_plugins.skills import AgentSkills
@@ -28,6 +29,7 @@ def build_agent(
     shared_tools: list | None = None,
     extra_plugins: list | None = None,
     hooks: list | None = None,
+    output_model: type[BaseModel] | None = None,
 ) -> Agent:
     plugins = []
     if skill_paths:
@@ -42,7 +44,16 @@ def build_agent(
         tools=[*spec.tools, *(shared_tools or [])],
         plugins=plugins,
         hooks=list(hooks or []),
+        structured_output_model=output_model,
     )
+
+
+def _model_for(node: NodeConfig, spec: AgentSpec, models: Mapping[str, Model]) -> Model:
+    """The role's shared model, wrapped per agent when the node asks for it."""
+    model = models[spec.role]
+    if node.model_wrapper is None:
+        return model
+    return node.model_wrapper(model, node.name, spec.name)
 
 
 def build_node_agents(node: NodeConfig, models: Mapping[str, Model]) -> list[Agent]:
@@ -50,12 +61,13 @@ def build_node_agents(node: NodeConfig, models: Mapping[str, Model]) -> list[Age
     return [
         build_agent(
             spec,
-            model=models[spec.role],
+            model=_model_for(node, spec, models),
             skill_paths=node.skill_paths,
             steering_prompt=node.steering_prompt,
             shared_tools=node.shared_tools,
             extra_plugins=node.extra_plugins,
             hooks=node.hooks,
+            output_model=node.output_model,
         )
         for spec in node.agents
     ]

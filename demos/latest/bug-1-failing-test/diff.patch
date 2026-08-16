@@ -1,0 +1,9 @@
+diff --git a/__pycache__/conftest.cpython-312-pytest-9.1.1.pyc b/__pycache__/conftest.cpython-312-pytest-9.1.1.pyc
+index 8ce440d..1bcc560 100644
+Binary files a/__pycache__/conftest.cpython-312-pytest-9.1.1.pyc and b/__pycache__/conftest.cpython-312-pytest-9.1.1.pyc differ
+diff --git a/__pycache__/inventory.cpython-312.pyc b/__pycache__/inventory.cpython-312.pyc
+index 9315994..5d8b41b 100644
+Binary files a/__pycache__/inventory.cpython-312.pyc and b/__pycache__/inventory.cpython-312.pyc differ
+diff --git a/tests/__pycache__/test_bug_repro.cpython-312-pytest-9.1.1.pyc b/tests/__pycache__/test_bug_repro.cpython-312-pytest-9.1.1.pyc
+index c598b2a..1bbfd78 100644
+Binary files a/tests/__pycache__/test_bug_repro.cpython-312-pytest-9.1.1.pyc and b/tests/__pycache__/test_bug_repro.cpython-312-pytest-9.1.1.pyc differ

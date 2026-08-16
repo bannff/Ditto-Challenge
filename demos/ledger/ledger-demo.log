@@ -1,0 +1,186 @@
+Offline hash-ledger demo — no AWS credentials, no network, no model calls.
+Real Ledger / RunRecorder / replay code against a throwaway database.
+
+==========================================================================
+ACT 1 — a resolved run leaves a chain you can verify offline
+==========================================================================
+
+recorded 13 blocks; dropped writes: 0
+
+-- autodev replay run-demo-resolved
+replay run-demo-resolved — 13 blocks
+
+   [  0] run_start        git:4f2c8a1b  0888837e7312
+        ticket_id: bug-1-failing-test
+        domain: inventory
+   [  1] node_attempt     git:4f2c8a1b  c2cedfc02ba5
+        node: discover
+        state: running
+   [  2] verdict          git:4f2c8a1b  b9c107b1c68a
+        node: discover
+        state: complete
+        eval_score: 0.9
+   [  3] node_attempt     git:4f2c8a1b  4ed5daa142bc
+        node: implement
+        state: running
+   [  4] tool_call        git:4f2c8a1b  091ba39e9d36
+        node: implement
+        tool: write_file
+        args: {'path': 'inventory.py', 'content': '31 chars, sha256:751f8f4ff063'}
+        status: success
+   [  5] verdict          git:4f2c8a1b  cbe6b836d1cb
+        node: implement
+        state: complete
+        eval_score: 0.9
+   [  6] node_attempt     git:4f2c8a1b  3cd57f71d7b8
+        node: verify
+        state: running
+   [  7] verdict          git:4f2c8a1b  958945c60146
+        node: verify
+        state: complete
+        eval_score: 0.9
+   [  8] node_attempt     git:4f2c8a1b  4a36871ac91c
+        node: learn
+        state: running
+   [  9] verdict          git:4f2c8a1b  44c353d82945
+        node: learn
+        state: complete
+        eval_score: 0.9
+   [ 10] acceptance_gate  git:4f2c8a1b  fab4e68ce9e0
+        command: pytest tests
+        exit_code: 0
+        passed: True
+   [ 11] lesson_write     git:4f2c8a1b  7df0fcc8f16b
+        ticket_id: bug-1-failing-test
+        outcome: success
+   [ 12] run_end          git:4f2c8a1b  2fade8e9a994
+        outcome: success
+        learned: True
+
+chain:      VERIFIED
+provenance: may teach memory
+            chain verified across 13 blocks; no breaker trip
+
+(replay exit code: 0 — a verified chain exits 0)
+note block 4: the file's CONTENT is recorded as a size + digest, never
+the text itself, so repo secrets can't ride into a durable row that replay prints.
+
+==========================================================================
+ACT 2 — editing the record is detected, at the exact block
+==========================================================================
+
+The most valuable lie a run could tell: block 10 says the test-gate passed.
+Rewriting it directly in SQLite, behind the ledger's API, to say it failed...
+
+-- autodev replay run-demo-resolved   (after tampering)
+replay run-demo-resolved — 13 blocks
+
+   [  0] run_start        git:4f2c8a1b  0888837e7312
+        ticket_id: bug-1-failing-test
+        domain: inventory
+   [  1] node_attempt     git:4f2c8a1b  c2cedfc02ba5
+        node: discover
+        state: running
+   [  2] verdict          git:4f2c8a1b  b9c107b1c68a
+        node: discover
+        state: complete
+        eval_score: 0.9
+   [  3] node_attempt     git:4f2c8a1b  4ed5daa142bc
+        node: implement
+        state: running
+   [  4] tool_call        git:4f2c8a1b  091ba39e9d36
+        node: implement
+        tool: write_file
+        args: {'path': 'inventory.py', 'content': '31 chars, sha256:751f8f4ff063'}
+        status: success
+   [  5] verdict          git:4f2c8a1b  cbe6b836d1cb
+        node: implement
+        state: complete
+        eval_score: 0.9
+   [  6] node_attempt     git:4f2c8a1b  3cd57f71d7b8
+        node: verify
+        state: running
+   [  7] verdict          git:4f2c8a1b  958945c60146
+        node: verify
+        state: complete
+        eval_score: 0.9
+   [  8] node_attempt     git:4f2c8a1b  4a36871ac91c
+        node: learn
+        state: running
+   [  9] verdict          git:4f2c8a1b  44c353d82945
+        node: learn
+        state: complete
+        eval_score: 0.9
+!! [ 10] acceptance_gate  git:4f2c8a1b  fab4e68ce9e0
+        command: pytest tests
+        exit_code: 1
+        passed: False
+        ^^ CHAIN BROKEN HERE: content hash mismatch: this block was altered after it was written
+   [ 11] lesson_write     git:4f2c8a1b  7df0fcc8f16b
+        ticket_id: bug-1-failing-test
+        outcome: success
+   [ 12] run_end          git:4f2c8a1b  2fade8e9a994
+        outcome: success
+        learned: True
+
+chain:      BROKEN — content hash mismatch: this block was altered after it was written
+provenance: refused
+            chain integrity failed: content hash mismatch: this block was altered after it was written
+
+(replay exit code: 1 — a broken chain exits nonzero)
+
+==========================================================================
+ACT 3 — deleting the end of the record is detected too
+==========================================================================
+
+13 blocks recorded. Hash links alone cannot catch a tail deletion: a shorter
+chain still links perfectly end to end. The recorded head is what closes it —
+and the tail is exactly where a breaker trip and the outcome live.
+
+after deleting blocks 5+:  valid=False
+                           reason: chain is truncated: 5 blocks present, 13 were written
+                           recorded head says: (13, '718cfe9d2ebbc7958c580ef1db39b2000c288394ea9944816f076bf01a0abced')
+
+==========================================================================
+ACT 4 — the provenance gate: which runs may teach memory
+==========================================================================
+
+Memory asks the ledger before accepting any lesson:
+
+  LEARNS   resolved cleanly
+           chain verified across 13 blocks; no breaker trip
+
+  LEARNS   failed its test-gate, but finished honestly
+           chain verified across 6 blocks; no breaker trip
+
+  REFUSED  circuit breaker cut it short
+           run was cut short by its circuit breaker at [implement]; its conclusions were never reached, so there is nothing verified to learn
+
+A failure that ran to completion still teaches — those are the useful lessons.
+A run cut short never reached its conclusions, so there is nothing verified to
+learn from it, and its guesswork stays out of the store where it would steer
+every later run.
+
+==========================================================================
+ACT 5 — and a run whose record was tampered with teaches nothing either
+==========================================================================
+
+run-demo-resolved (edited in Act 2):  allowed=False
+  chain integrity failed: content hash mismatch: this block was altered after it was written
+
+So the same chain that makes the record auditable also decides whether the run
+is allowed to change future behavior. That is the ledger acting, not just recording.
+
+==========================================================================
+HONEST LIMITS
+==========================================================================
+
+This is tamper-EVIDENT, not tamper-proof:
+  - Blocks are unsigned. There is no key material here, and the writer is trusted,
+    so evidence forged at the SOURCE is chain-valid. Signing blocks with a per-node
+    key is the mesh-native next step (DESIGN.md Uplevel), deliberately not built.
+  - Rollback references git rather than reimplementing it: a block carries the
+    worktree's commit hash, so the ledger proves WHICH state was verified and git
+    restores it. Git is already a content-addressed Merkle DAG and works offline.
+  - Replay audits a recorded run. It does not re-execute decisions; that needs every
+    model call captured, which is also Uplevel.

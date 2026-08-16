@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from strands import tool
 
-from .worktree import Worktree, WorktreeError
+from .worktree import MAX_WRITE_BYTES, Worktree, WorktreeError
 
 
 def make_worktree_tools(wt: Worktree) -> list:
@@ -32,6 +32,14 @@ def make_worktree_tools(wt: Worktree) -> list:
             resolved = wt.safe_path(path)
         except WorktreeError as e:
             return f"refused: {e}"
+        # Bounded before the write, not after: what lands here is committed into the *target's*
+        # object store and stays there, so an oversized write is a durable cost to a repo we
+        # don't own. Refused with the limit in the message so the agent can split the file
+        # rather than retrying the same call — a truncated write would be worse than none,
+        # since the gate would then verify a file the agent didn't intend.
+        size = len(content.encode("utf-8", errors="replace"))
+        if size > MAX_WRITE_BYTES:
+            return f"refused: {size} bytes exceeds the {MAX_WRITE_BYTES}-byte limit for one file"
         resolved.parent.mkdir(parents=True, exist_ok=True)
         resolved.write_text(content)
         return f"wrote {path} ({len(content)} bytes)"

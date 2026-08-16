@@ -21,9 +21,10 @@ wheels/
 .sessions/
 .worktrees/
 
-# Local experiments and generated run bundles
+# Local experiments and probe scripts
 scratch/
-demos/
+# demos/ is intentionally NOT ignored: the committed bundles are how a judge inspects a
+# real run without running anything. Artifacts are scrubbed on write.
 
 # Challenge prompt and working spec — kept local, not published
 Reqs.md

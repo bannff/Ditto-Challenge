@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel
 from strands.models.model import Model
 from strands.multiagent import GraphBuilder, Swarm
 from strands.multiagent.base import MultiAgentBase, MultiAgentResult, Status
@@ -65,6 +66,10 @@ class WorkflowResult:
     verdicts: list[Verdict] = field(default_factory=list)
     outputs: dict[str, str] = field(default_factory=dict)
     final_output: str = ""
+    # The last node's structured value, when its NodeConfig declared an `output_model`.
+    # Deliberately untyped here: the engine carries whatever schema the node asked for and
+    # never learns what it means, the same way it never learns what a worktree is.
+    final_structured: BaseModel | None = None
     outcome: Outcome = Outcome.INCONCLUSIVE
     degraded: bool = False
 
@@ -82,16 +87,45 @@ def _avg(verdict: Verdict) -> float | None:
     return sum(s.score for s in verdict.scores) / len(verdict.scores)
 
 
-def _extract_text(result) -> str:
+def _terminal_agent_result(result):
+    """The last agent turn the swarm actually committed, or None.
+
+    `node_history` is the SDK's ordering record — it appends every committed turn, so its
+    tail is the agent that spoke last. `results` cannot answer this: it is a dict keyed by
+    agent name and overwritten in place, so its insertion order is order of *first*
+    execution. The two agree until an agent is revisited, and then reading `results` returns
+    whoever happened to start last rather than whoever finished ("drafter, refiner, critic,
+    refiner" hands back critic's text). Falling back to `results` keeps a swarm whose
+    history is empty readable.
+    """
     results = getattr(result, "results", {}) or {}
-    for node_result in reversed(list(results.values())):
+    history = getattr(result, "node_history", None) or []
+    names = [getattr(n, "node_id", n) for n in reversed(history)]
+    names += [n for n in reversed(list(results)) if n not in names]
+    for name in names:
+        node_result = results.get(name)
+        if node_result is None:
+            continue
         try:
             agent_results = node_result.get_agent_results()
         except Exception:
             agent_results = []
         if agent_results:
-            return str(agent_results[-1])
-    return str(result)
+            return agent_results[-1]
+    return None
+
+
+def _extract_output(result) -> tuple[str, BaseModel | None]:
+    """The terminal turn as text, plus its structured value when the node declared a schema.
+
+    Both come from the same turn on purpose: the text is what the evaluators judge and what
+    the next stage reads, so a structured value taken from anywhere else would be scored
+    against prose it doesn't correspond to.
+    """
+    agent_result = _terminal_agent_result(result)
+    if agent_result is None:
+        return str(result), None
+    return str(agent_result), getattr(agent_result, "structured_output", None)
 
 
 def _build_evaluators(node: NodeConfig, model: Model) -> list[BuiltEvaluator]:
@@ -158,7 +192,7 @@ async def _run_swarm(agents, node: NodeConfig, task: str, session_manager=None):
         session_manager=session_manager,
     )
     result = await swarm.invoke_async(task)
-    return _extract_text(result), result
+    return _extract_output(result), result
 
 
 @dataclass
@@ -172,6 +206,12 @@ class _RunContext:
     sessions_dir: Path
     base_task: str
     deadline_seconds: float | None
+    # Optional workspace checkpointing, supplied by the caller so the engine never learns
+    # what a worktree is. checkpoint(node) -> commit hash after a node passes; restore()
+    # puts the tree back before an informed retry, so attempt N+1 starts from a known state
+    # instead of inheriting attempt N's half-applied edits.
+    checkpoint_cb: Callable[[str], str | None] | None = None
+    restore_cb: Callable[[], None] | None = None
     start: float = field(default_factory=time.monotonic)
     outputs: dict[str, str] = field(default_factory=dict)
     verdicts: list[Verdict] = field(default_factory=list)
@@ -208,6 +248,7 @@ class _GateNode(MultiAgentBase):
         self.attempts = 0
         self.verdict: Verdict | None = None
         self.output = ""
+        self.structured: BaseModel | None = None
         self.degraded = False
 
     def _attempt_task(self) -> str:
@@ -235,7 +276,9 @@ class _GateNode(MultiAgentBase):
             session_id=f"{self.ctx.prefix}-{node.name}-{self.attempts}",
             storage_dir=str(self.ctx.sessions_dir),
         )
-        self.output, swarm_result = await _run_swarm(agents, node, attempt_task, session_manager)
+        (self.output, self.structured), swarm_result = await _run_swarm(
+            agents, node, attempt_task, session_manager
+        )
         session = build_session(f"{self.ctx.prefix}-{node.name}-{self.attempts}")
         self.verdict = await run_checkpoint(
             node.name,
@@ -251,15 +294,25 @@ class _GateNode(MultiAgentBase):
         if self.verdict.passed:
             self.ctx.outputs[node.name] = self.output
             self.ctx.verdicts.append(self.verdict)
+            # Checkpoint the tree that earned this pass, so a later failure can roll back to
+            # it rather than to the start of the run.
+            if self.ctx.checkpoint_cb is not None:
+                self.ctx.checkpoint_cb(node.name)
             _emit(self.ctx.status_cb, node.name, NodeState.COMPLETE, _avg(self.verdict))
         elif self.attempts > node.max_redos:
             # Retries spent — circuit breaker: degrade with a fixed message, no extra
             # model calls. No outgoing edge fires after this, so the graph stops here.
             self.degraded = True
             self.output = DEGRADED_MESSAGE
+            self.structured = None  # a degraded node produced no result to hand on
             self.ctx.outputs[node.name] = DEGRADED_MESSAGE
             self.ctx.verdicts.append(self.verdict)
             _emit(self.ctx.status_cb, node.name, NodeState.FAILED, _avg(self.verdict))
+        elif self.ctx.restore_cb is not None:
+            # This attempt failed and another is coming. Put the tree back to the last
+            # checkpoint first: without this, the informed retry starts on top of whatever
+            # the failed attempt left behind, and diagnoses a tree nobody intended.
+            self.ctx.restore_cb()
 
         # The graph node itself always completes; pass/fail routing happens on the edges,
         # which read the structured verdict — a checkpoint failure is not a node crash.
@@ -345,6 +398,7 @@ def _assemble(gates: list[_GateNode], ctx: _RunContext) -> WorkflowResult:
         _emit(ctx.status_cb, first_unrun.config.name, NodeState.FAILED)
         result.degraded = True
     result.final_output = ran[-1].output if ran else ""
+    result.final_structured = ran[-1].structured if ran else None
     failed = result.degraded or any(not v.passed for v in result.verdicts)
     result.outcome = Outcome.FAILURE if failed else Outcome.SUCCESS
     return result
@@ -371,6 +425,8 @@ def run_workflow(
     session_prefix: str = "run",
     sessions_dir: Path | str | None = None,
     deadline_seconds: float | None = None,
+    checkpoint_cb: Callable[[str], str | None] | None = None,
+    restore_cb: Callable[[], None] | None = None,
 ) -> WorkflowResult:
     resolved = models or default_models()
     storage = Path(sessions_dir) if sessions_dir else get_settings().sessions_dir
@@ -382,5 +438,7 @@ def run_workflow(
         sessions_dir=storage,
         base_task=task,
         deadline_seconds=deadline_seconds,
+        checkpoint_cb=checkpoint_cb,
+        restore_cb=restore_cb,
     )
     return asyncio.run(_run_workflow(nodes, ctx))

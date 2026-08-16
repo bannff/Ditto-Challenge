@@ -23,6 +23,7 @@ from self_improving_coding_agent.acceptance_policy import (
     POLICIES,
     AcceptanceRejected,
     normalize,
+    resolve,
     validate,
 )
 
@@ -171,6 +172,38 @@ def test_only_pytest_can_be_the_gate(command: str, jail: Path):
 # --- `-m` means two different things -------------------------------------------------------
 
 
+ARGFILE = [
+    "pytest @opts.txt",                 # the plain splice
+    "pytest @opts.txt tests",
+    "pytest tests @opts.txt",           # position doesn't matter: argparse expands all of argv
+    "pytest -k @opts.txt tests",        # ...including a flag's value slot
+    "pytest -m @opts.txt",
+    "pytest --tb @opts.txt",
+    "pytest --maxfail @opts.txt",
+    "pytest @",                         # the bare prefix
+    "pytest @nested.txt",               # expansion is recursive
+    "python3 -m pytest @opts.txt",      # and survives normalization
+    "python -m pytest -q @opts.txt tests",
+]
+
+
+@pytest.mark.parametrize("command", ARGFILE)
+def test_an_argument_file_token_is_refused_anywhere_in_the_command(command: str, jail: Path):
+    """pytest sets fromfile_prefix_chars="@", so argparse replaces such a token with the
+    lines of that file *before* parsing — at any position, recursively. That splices in
+    arbitrary options (a later `-o addopts=` overrides the one we force), and the file can be
+    outside the worktree, so its contents leak through pytest's error output."""
+    assert "argument-file token is not allowed" in _refusal(command, jail)
+
+
+def test_an_attached_argfile_value_is_inert_but_still_refused(jail: Path):
+    # `--tb=@f` is NOT expanded by argparse (only tokens whose first character is @), so it
+    # would fail closed at the runner anyway — but the token still names a file we never want
+    # near the gate, so the policy refuses it rather than relying on pytest's usage error.
+    for command in ("pytest --tb=@opts.txt", "pytest -k=@opts.txt"):
+        assert "argument-file token is not allowed" in _refusal(command, jail)
+
+
 def test_dash_m_is_a_marker_expression_for_pytest_not_a_module(jail: Path):
     # `-m` means "marker expression" to pytest and "module" to an interpreter. Rather than
     # police both meanings, only pytest is a runner — so the ambiguity cannot arise, and a
@@ -221,6 +254,21 @@ def test_a_positional_path_outside_the_worktree_is_refused(command: str, jail: P
 def test_an_absolute_path_inside_the_worktree_is_allowed(jail: Path):
     _check(f"pytest {jail / 'tests'}", jail)
     _check(f"pytest {jail}", jail)
+
+
+def test_the_executed_positional_is_the_path_we_validated(jail: Path):
+    """pytest doesn't resolve symlinks, so it must be handed the canonical path rather than
+    the ticket's spelling: an unresolved absolute path (macOS /tmp, or a symlinked worktree
+    base) would otherwise sit outside our resolved --confcutdir and pull in an ancestor's
+    conftest.py — the exact escape --confcutdir exists to prevent."""
+    unresolved = Path(str(jail).replace("/private/tmp", "/tmp"))
+    for spelling in (jail / "tests", unresolved / "tests", Path("tests")):
+        argv = resolve(["pytest", str(spelling)], in_jail=jail)
+        assert argv[-1] == "tests", f"{spelling} executed as {argv[-1]!r}"
+    # the root itself, and a node id, keep their meaning
+    assert resolve(["pytest", str(jail)], in_jail=jail)[-1] == "."
+    assert resolve(["pytest", "tests/test_x.py::test_x"], in_jail=jail)[-1] == \
+        "tests/test_x.py::test_x"
 
 
 def test_an_existing_symlink_pointing_out_is_refused(jail: Path, tmp_path: Path):

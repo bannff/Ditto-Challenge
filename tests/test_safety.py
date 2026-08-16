@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from self_improving_coding_agent import graph, workflow
-from self_improving_coding_agent.contracts import Outcome, Ticket, Verdict
+from self_improving_coding_agent.contracts import LessonDraft, Outcome, Ticket, Verdict
 from self_improving_coding_agent.fallback import build_fallback_model
 from self_improving_coding_agent.graph import WorkflowModels, WorkflowResult, run_workflow
 from self_improving_coding_agent.ledger import Ledger
@@ -52,10 +52,13 @@ def _node(name: str = "discover", max_redos: int = 1) -> NodeConfig:
 
 
 def _wf_success() -> WorkflowResult:
+    # `final_structured` is what memory actually learns from — a fake that sets only
+    # `final_output` describes a run the Learn node failed to answer, which teaches nothing.
     return WorkflowResult(
         verdicts=[Verdict(node="discover", passed=True)],
         outputs={"learn": "Lesson: prefer small diffs."},
         final_output="Lesson: prefer small diffs.",
+        final_structured=LessonDraft(rule="Prefer small diffs; verify the boundary case."),
         outcome=Outcome.SUCCESS,
         degraded=False,
     )

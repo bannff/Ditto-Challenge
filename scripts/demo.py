@@ -24,8 +24,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+from artifacts import safe_output_name, write_run_bundle
+
 from self_improving_coding_agent.contracts import RunReport, Ticket
-from self_improving_coding_agent.scrub import scrub_text
+from self_improving_coding_agent.ledger import Ledger
+from self_improving_coding_agent.settings import get_settings
 from self_improving_coding_agent.workflow import run_ticket
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -86,20 +89,6 @@ def _summary(report: RunReport) -> None:
         print(f"  lesson stored: {report.lesson.content[:160].strip()}...")
 
 
-def _write_artifacts(report: RunReport, dest: Path, trace: str) -> None:
-    # A judge-inspectable bundle: human trace, machine-readable report, and the complete
-    # diff (the ledger caps its own history row; what a reviewer reads is never clipped).
-    # Every artifact crosses a persistence boundary, so each is scrubbed before write.
-    artifacts = [
-        ("trace.log", trace),
-        ("report.json", report.model_dump_json(indent=2)),
-        ("diff.patch", report.evidence),
-    ]
-    dest.mkdir(parents=True, exist_ok=True)
-    for name, content in artifacts:
-        (dest / name).write_text(scrub_text(content))
-
-
 def run(ticket_path: Path, out_dir: Path | None = None, target: Path = TARGET_APP) -> None:
     ticket = Ticket.model_validate(json.loads(ticket_path.read_text()))
     print(f"\n{'=' * 70}\nTICKET {ticket.id} [{ticket.domain}]: {ticket.request[:80]}\n{'=' * 70}")
@@ -113,10 +102,16 @@ def run(ticket_path: Path, out_dir: Path | None = None, target: Path = TARGET_AP
         print(line)
         lines.append(line)
 
-    report = run_ticket(ticket, status_cb=trace, telemetry_console=False)
+    ledger = Ledger(get_settings().ledger_db)
+    report = run_ticket(ticket, status_cb=trace, telemetry_console=False, ledger=ledger)
     _summary(report)
     if out_dir is not None:
-        _write_artifacts(report, out_dir / ticket.id, "\n".join(lines) + "\n")
+        write_run_bundle(
+            report=report,
+            ledger=ledger,
+            dest=out_dir / safe_output_name(report.run_id),
+            trace="\n".join(lines) + "\n",
+        )
 
 
 def main(argv: list[str]) -> None:

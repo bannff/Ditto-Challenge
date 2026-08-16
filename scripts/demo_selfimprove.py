@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import subprocess
 import sys
@@ -27,9 +28,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from artifacts import (
+    ContrastAcceptance,
+    ContrastCheck,
+    ContrastRuns,
+    SelfImprovementContrast,
+    write_run_bundle,
+    write_self_improvement_contrast,
+)
 from demo import TARGET_APP, TARGET_APP_2, materialize  # same scripts/ dir
 
 from self_improving_coding_agent.contracts import Lesson, Outcome, RunReport, Ticket
+from self_improving_coding_agent.ledger import Ledger
 from self_improving_coding_agent.memory import LessonMemory
 from self_improving_coding_agent.workflow import run_ticket
 
@@ -57,14 +67,53 @@ class Scenario:
     check: Callable[[Path, str], bool]
 
 
+def _is_discontinued_exclusion(node: ast.expr) -> bool:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return isinstance(node.operand, ast.Attribute) and node.operand.attr == "discontinued"
+    if not isinstance(node, ast.Compare) or len(node.ops) != 1 or len(node.comparators) != 1:
+        return False
+    return (
+        isinstance(node.left, ast.Attribute)
+        and node.left.attr == "discontinued"
+        and isinstance(node.ops[0], (ast.Eq, ast.Is))
+        and isinstance(node.comparators[0], ast.Constant)
+        and node.comparators[0].value is False
+    )
+
+
 def _inventory_excludes_discontinued(repo: Path, branch: str) -> bool:
-    code = _committed(repo, branch, "inventory.py")
-    ns: dict = {}
-    exec(compile(code, "inventory.py", "exec"), ns)  # noqa: S102 — our own fixture
-    inv = ns["Inventory"]()
-    inv.add_item("A", "a", 1, 1.0)
-    inv.add_item("D", "d", 1, 1.0, discontinued=True)
-    return "D" not in [i.sku for i in inv.needs_reorder(5)]
+    try:
+        module = ast.parse(_committed(repo, branch, "inventory.py"))
+    except SyntaxError:
+        return False
+    inventory = next(
+        (
+            node
+            for node in module.body
+            if isinstance(node, ast.ClassDef) and node.name == "Inventory"
+        ),
+        None,
+    )
+    if inventory is None:
+        return False
+    method = next(
+        (
+            node
+            for node in inventory.body
+            if isinstance(node, ast.FunctionDef) and node.name == "needs_reorder"
+        ),
+        None,
+    )
+    if method is None:
+        return False
+    return any(
+        _is_discontinued_exclusion(predicate)
+        for clause in ast.walk(method)
+        if isinstance(clause, ast.comprehension)
+        for condition in clause.ifs
+        for predicate in ast.walk(condition)
+        if isinstance(predicate, ast.expr)
+    )
 
 
 def _summary_path_also_locked(repo: Path, branch: str) -> bool:
@@ -114,15 +163,26 @@ SCENARIOS = {
 }
 
 
-def _run(label: str, scenario: Scenario, memory: LessonMemory) -> tuple[RunReport, Path]:
+def _run(
+    label: str, scenario: Scenario, memory: LessonMemory
+) -> tuple[RunReport, Path, Ledger, str]:
     ticket = Ticket.model_validate(json.loads(scenario.ticket.read_text()))
     repo = materialize(Path(tempfile.mkdtemp(prefix=f"autodev_{label}_")) / "repo",
                        scenario.target)
     ticket = ticket.model_copy(update={"repository": str(repo)})
-    report = run_ticket(ticket, memory=memory, telemetry_console=False)
+    ledger = Ledger(Path(tempfile.mkdtemp(prefix=f"ledger_{label}_")) / "ledger.db")
+    lines: list[str] = []
+
+    def trace(event: dict) -> None:
+        line = f"[{label}] {event['node']} {event['state']}"
+        print(line)
+        lines.append(line)
+
+    report = run_ticket(ticket, memory=memory, ledger=ledger, status_cb=trace,
+                        telemetry_console=False)
     accept = report.acceptance.exit_code if report.acceptance else "n/a"
     print(f"[{label}] outcome={report.outcome} acceptance_exit={accept}")
-    return report, repo
+    return report, repo, ledger, "\n".join(lines) + "\n"
 
 
 def _verify(scenario: Scenario, report: RunReport, repo: Path) -> bool | None:
@@ -131,10 +191,40 @@ def _verify(scenario: Scenario, report: RunReport, repo: Path) -> bool | None:
     return scenario.check(repo, report.branch)
 
 
-def main(argv: list[str]) -> None:
+def _gate_passed(report: RunReport) -> bool:
+    return report.acceptance is not None and report.acceptance.passed
+
+
+def _write_contrast(
+    dest: Path,
+    scenario: Scenario,
+    control: RunReport,
+    primed: RunReport,
+    control_check: bool | None,
+    primed_check: bool | None,
+) -> None:
+    if control_check is None or primed_check is None:
+        raise ValueError("self-improvement contrast requires both check results")
+    contrast = SelfImprovementContrast(
+        scenario=scenario.ticket.stem,
+        primed_rule=scenario.rule,
+        runs=ContrastRuns(control=control.run_id, primed=primed.run_id),
+        acceptance=ContrastAcceptance(
+            control=_gate_passed(control), primed=_gate_passed(primed)
+        ),
+        check=ContrastCheck(
+            label=scenario.check_label, control=control_check, primed=primed_check
+        ),
+    )
+    write_self_improvement_contrast(contrast=contrast, dest=dest)
+
+
+def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description="Before/after self-improvement demo.")
     p.add_argument("--app", choices=[*SCENARIOS], default="app2")
-    scenario = SCENARIOS[p.parse_args(argv).app]
+    p.add_argument("--out", type=Path, help="write control/primed evidence bundles under this dir")
+    args = p.parse_args(argv)
+    scenario = SCENARIOS[args.app]
 
     control_mem = LessonMemory(storage_dir=Path(tempfile.mkdtemp(prefix="mem_control_")))
     primed_mem = LessonMemory(storage_dir=Path(tempfile.mkdtemp(prefix="mem_primed_")))
@@ -148,17 +238,51 @@ def main(argv: list[str]) -> None:
         print(" -", lesson)
     print()
 
-    control_report, control_repo = _run("control", scenario, control_mem)
-    primed_report, primed_repo = _run("primed", scenario, primed_mem)
+    control_report, control_repo, control_ledger, control_trace = _run(
+        "control", scenario, control_mem
+    )
+    primed_report, primed_repo, primed_ledger, primed_trace = _run("primed", scenario, primed_mem)
 
     print(f"\n=== hidden business-rule check ({scenario.check_label}) ===")
-    print(f"[control] {_verify(scenario, control_report, control_repo)}")
-    print(f"[primed]  {_verify(scenario, primed_report, primed_repo)}")
-    print(
-        "\nBoth passed the acceptance gate; the primed run also satisfied the memory-only "
-        "business rule the control run had no way to know."
+    control_check = _verify(scenario, control_report, control_repo)
+    primed_check = _verify(scenario, primed_report, primed_repo)
+    print(f"[control] {control_check}")
+    print(f"[primed]  {primed_check}")
+    if args.out is not None:
+        write_run_bundle(
+            report=control_report, ledger=control_ledger, dest=args.out / "control",
+            trace=control_trace,
+        )
+        write_run_bundle(
+            report=primed_report, ledger=primed_ledger, dest=args.out / "primed",
+            trace=primed_trace,
+        )
+        _write_contrast(
+            args.out,
+            scenario,
+            control_report,
+            primed_report,
+            control_check,
+            primed_check,
+        )
+
+    successful = (
+        control_report.outcome is Outcome.SUCCESS
+        and primed_report.outcome is Outcome.SUCCESS
+        and _gate_passed(control_report)
+        and _gate_passed(primed_report)
+        and control_check is False
+        and primed_check is True
     )
+    if successful:
+        print(
+            "\nBoth passed the acceptance gate; the primed run also satisfied the memory-only "
+            "business rule the control run had no way to know."
+        )
+        return 0
+    print("\nSelf-improvement contrast did not meet its required evidence conditions.")
+    return 1
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    raise SystemExit(main(sys.argv[1:]))

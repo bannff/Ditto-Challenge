@@ -55,8 +55,10 @@ class LessonMemory:
         self._m = Memory.from_config(_config(store_dir))
 
     def store(self, lesson: Lesson) -> None:
-        # Store both outcomes, verbatim (the Learn node already distilled the text) and
-        # scrubbed. infer=False keeps it deterministic and skips an extra Bedrock call.
+        # Store both outcomes, verbatim and scrubbed. Verbatim is safe because the text is
+        # the `rule` field of the Learn node's declared schema, not its closing turn — that
+        # distinction is the whole of `_lesson_content`. infer=False keeps it deterministic
+        # and skips an extra Bedrock call.
         content = scrub_text(lesson.content)
         # Dedup: a re-run of the same ticket produces a near-identical lesson; don't let
         # memory accumulate duplicates (junk-resistance).

@@ -9,9 +9,20 @@ for both outcomes even though the Learn agent distills its text.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
-from .contracts import AcceptanceResult, BlockType, Lesson, Outcome, RunReport, Ticket
-from .graph import WorkflowModels, default_models, run_workflow
+from .cassette import Cassette, model_wrapper
+from .contracts import (
+    AcceptanceResult,
+    BlockType,
+    Lesson,
+    LessonDraft,
+    Outcome,
+    ProvenanceDecision,
+    RunReport,
+    Ticket,
+)
+from .graph import WorkflowModels, WorkflowResult, default_models, run_workflow
 from .kb import PolicyKB, make_query_policy_tool
 from .ledger import Ledger
 from .memory import LessonMemory, make_memory_tools
@@ -27,9 +38,73 @@ from .worktree import Worktree, WorktreeError
 # the entire multi-node run so a confused ticket can't burn unbounded wall-clock/cost.
 RUN_DEADLINE_SECONDS = 1800.0
 
+# What a stored rule has to be. Applied here rather than on the LessonDraft contract, where a
+# constraint is a model-reachable loop; see LessonDraft. The cap matters because every stored
+# rule is embedded and searched on every later run, so length is a recall cost, not cosmetics.
+_MIN_RULE_CHARS = 16
+_MAX_RULE_CHARS = 600
+
 
 def _new_run_id() -> str:
     return "run-" + uuid.uuid4().hex[:12]
+
+
+def _refusal_reason(
+    provenance: ProvenanceDecision,
+    intact: bool,
+    degraded: bool,
+    replaying: bool,
+    has_rule: bool = True,
+) -> str:
+    """Why memory was not allowed to learn from this run. Most specific reason first.
+
+    `has_rule` is checked last on purpose. A degraded or breaker-tripped run has no rule
+    *because* it was cut short, so reporting the missing rule would name the symptom and hide
+    the cause. It is the reason only when nothing else went wrong.
+    """
+    if replaying:
+        return "a replayed run re-derives a recorded lesson; it is not a fresh observation"
+    if not provenance.allowed:
+        return provenance.reason
+    if not intact:
+        return "part of the run's record failed to write, so the record can't be trusted"
+    if degraded:
+        return "the run degraded, so its conclusions were never verified"
+    if not has_rule:
+        return "the Learn node produced no usable rule, so there is nothing to remember"
+    return "refused"
+
+
+def _evidence(unshippable: str | None, diff: str) -> str:
+    if unshippable is None:
+        return diff
+    return f"not shipped: {unshippable}\n\n{diff}"
+
+
+def _lesson_content(wf: WorkflowResult) -> str | None:
+    """The rule the Learn node produced, or None if it produced nothing usable.
+
+    The node's `output_model` is what makes this a field rather than a guess. Persisting
+    `final_output` instead stored the agent's whole closing turn, so a lesson read "Good -
+    I've recalled the existing lessons..." and memory served that back on later runs.
+
+    Returning None rather than a placeholder is the point: "no rule" has to be a *reason not
+    to teach*, checked where that decision is made. Every path that loses the schema today
+    also degrades the run, so a placeholder would be unreachable — but only by coincidence of
+    two distant mechanisms, and a value that is stored correctly by accident is one refactor
+    from being stored wrongly.
+
+    The length policy lives here, not on the contract: a constraint on the schema field is
+    reachable by the model and loops the forced tool call (see `LessonDraft`). Here an
+    over-long rule costs one truncation.
+    """
+    draft = wf.final_structured
+    if not isinstance(draft, LessonDraft):
+        return None
+    rule = " ".join(draft.rule.split())
+    if len(rule) < _MIN_RULE_CHARS:  # a fragment is not a rule
+        return None
+    return rule[:_MAX_RULE_CHARS]
 
 
 def run_ticket(
@@ -41,14 +116,19 @@ def run_ticket(
     memory: LessonMemory | None = None,
     ledger: Ledger | None = None,
     telemetry_console: bool = True,
+    cassette: Cassette | None = None,
 ) -> RunReport:
     settings = get_settings()
     settings.ensure_dirs()
     run_id = _new_run_id()
     ledger = ledger or Ledger(settings.ledger_db)
     recorder = RunRecorder(ledger, run_id)
+    # A replayed run drives its tools from recorded model output. Recorded output is not
+    # evidence, so such a run is a verification harness: it never ships and never teaches.
+    replaying = cassette is not None and cassette.mode == "replay"
     recorder.append(
-        BlockType.RUN_START, {"ticket_id": ticket.id, "domain": ticket.domain}
+        BlockType.RUN_START,
+        {"ticket_id": ticket.id, "domain": ticket.domain, "replaying": replaying},
     )
 
     reason = should_refuse(ticket)
@@ -68,9 +148,10 @@ def run_ticket(
     memory = memory or LessonMemory()
 
     worktree = Worktree.create(ticket.repository, run_id, settings.worktrees_dir)
+    Worktree.prune_checkpoints(Path(ticket.repository).resolve())
     keep_branch = False
     try:
-        recorder.track_git(worktree.head_hash())
+        recorder.track_git(worktree.seed)
         primed = memory.retrieve(ticket.request)
         nodes = build_reference_nodes(
             worktree_tools=make_worktree_tools(worktree),
@@ -79,8 +160,23 @@ def run_ticket(
             primed_lessons="\n".join(f"- {p}" for p in primed),
         )
         for node in nodes:  # tool calls reach the ledger; the engine stays ledger-unaware
-            node.hooks = [recorder]
+            node.hooks = [recorder.for_node(node.name)]
+            node.model_wrapper = model_wrapper(recorder.wrap_model, cassette)
         task = f"Ticket [{ticket.domain}] {ticket.id}: {ticket.request}"
+        checkpoints: list[str] = []
+
+        def checkpoint(node_name: str) -> str | None:
+            """Commit the tree that just passed, and point the chain at it."""
+            commit = worktree.checkpoint(node_name)
+            if commit is not None:
+                checkpoints.append(commit)
+                recorder.track_git(commit)  # the VERDICT block references restorable state
+            return commit
+
+        def restore() -> None:
+            """Before an informed retry, put the tree back to the last known-good state."""
+            worktree.restore(checkpoints[-1] if checkpoints else worktree.seed)
+
         wf = run_workflow(
             nodes,
             task,
@@ -88,6 +184,8 @@ def run_ticket(
             status_cb=recorder.status_callback(status_cb),
             session_prefix=run_id,
             deadline_seconds=RUN_DEADLINE_SECONDS,
+            checkpoint_cb=checkpoint,
+            restore_cb=restore,
         )
 
         acceptance = None
@@ -128,19 +226,41 @@ def run_ticket(
         else:
             outcome = Outcome.FAILURE
 
-        diff = worktree.diff()
-        if success:
-            worktree.commit(f"autodev: resolve {ticket.id}")
-            keep_branch = True
+        diff = worktree.diff()  # captured before either branch, so the evidence survives both
+        unshippable: str | None = None
+        if success and not replaying:
+            # A commit that didn't happen must not be reported as one. Ignoring this return
+            # value produced the worst report available: SUCCESS, with a branch carrying
+            # nothing (verified — the ticket's own gate exited non-zero when re-run against
+            # it). The two ways it can happen mean different things, so they get different
+            # outcomes:
+            #   * refused — the tree passed its gate but must not ship (this run's own ignore
+            #     rules hide too much, or the change is larger than a target's history should
+            #     absorb). Work was done and rejected: that is a FAILURE.
+            #   * nothing to commit — the gate passed because the target was already green and
+            #     the agent changed nothing. There is no change to resolve, so the ticket is
+            #     unresolved rather than failed: INCONCLUSIVE, the same answer as a run with
+            #     no gate at all.
+            # finalize, not commit: a checkpointed change is already committed, so the tree is
+            # clean and a bare commit() would report "no change" and discard verified work.
+            if worktree.finalize(f"autodev: resolve {ticket.id}"):
+                keep_branch = True
+            else:
+                unshippable = worktree.last_commit_refusal
+                outcome = Outcome.FAILURE if unshippable else Outcome.INCONCLUSIVE
+                unshippable = unshippable or "the run made no change to the target"
+                worktree.revert()
         else:
             worktree.revert()  # a change that isn't verified is never shipped
         recorder.track_git(worktree.head_hash())
 
-        lesson = Lesson(
-            ticket_id=ticket.id,
-            outcome=outcome,
-            content=(wf.final_output.strip() or "no lesson produced"),
-            tags=[ticket.domain],
+        # No usable rule means no lesson object at all, rather than a placeholder one that
+        # every gate below would have to remember to reject.
+        rule = _lesson_content(wf)
+        lesson = (
+            Lesson(ticket_id=ticket.id, outcome=outcome, content=rule, tags=[ticket.domain])
+            if rule
+            else None
         )
         # Provenance gate: memory asks the ledger whether this run may teach it anything.
         # An honest failure still teaches — only a run whose record can't be trusted is
@@ -149,8 +269,14 @@ def run_ticket(
         # tried to write landed (an omitted block leaves a chain that still verifies), and
         # the workflow itself didn't degrade (first-hand, not laundered through the ledger).
         provenance = ledger.provenance(run_id)
-        may_learn = provenance.allowed and recorder.intact and not wf.degraded
-        if may_learn:
+        may_learn = (
+            lesson is not None
+            and provenance.allowed
+            and recorder.intact
+            and not wf.degraded
+            and not replaying
+        )
+        if may_learn and lesson is not None:
             memory.store(lesson)
             recorder.append(
                 BlockType.LESSON_WRITE, {"ticket_id": ticket.id, "outcome": str(outcome)}
@@ -159,11 +285,18 @@ def run_ticket(
             recorder.append(
                 BlockType.LESSON_REFUSED,
                 {
-                    "reason": provenance.reason if not provenance.allowed
-                    else "the run degraded, so its conclusions were never verified",
+                    "reason": _refusal_reason(
+                        provenance,
+                        recorder.intact,
+                        wf.degraded,
+                        replaying,
+                        has_rule=lesson is not None,
+                    ),
                     "chain_verified": provenance.allowed,
                     "record_complete": recorder.intact,
                     "workflow_degraded": wf.degraded,
+                    "replaying": replaying,
+                    "rule_produced": lesson is not None,
                 },
             )
 
@@ -174,7 +307,10 @@ def run_ticket(
             outcome=outcome,
             verdicts=wf.verdicts,
             acceptance=acceptance,
-            evidence=refusal or diff,  # the whole diff; the ledger bounds its own row
+            # The whole diff; the ledger bounds its own row. A tree that passed its gate and
+            # then couldn't ship is the one case where the diff alone misleads — it shows work
+            # that no branch carries — so the reason leads.
+            evidence=refusal or _evidence(unshippable, diff),
             # Only set when memory actually took it: an empty lesson on the report means
             # this run taught nothing, which is the honest reading.
             lesson=lesson if may_learn else None,

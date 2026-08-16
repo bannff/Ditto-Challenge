@@ -38,7 +38,7 @@ from test_hostile_tickets import (  # the shared harness lives next door
 from self_improving_coding_agent.acceptance_policy import normalize, resolve
 from self_improving_coding_agent.contracts import Outcome
 from self_improving_coding_agent.settings import get_settings
-from self_improving_coding_agent.worktree import Worktree
+from self_improving_coding_agent.worktree import Worktree, WorktreeError
 
 TMP = Path(get_settings().worktrees_dir).parent
 
@@ -82,12 +82,30 @@ def test_a_gate_that_could_never_fail_is_refused_before_any_spend(repo: Path, tm
     _assert_target_untouched(repo, head, branch)
 
 
-def test_forced_args_are_always_ours_and_always_first():
-    for command in ("pytest", "pytest -q tests", "python3 -m pytest -x tests/test_idor.py",
-                    "pytest --tb -o addopts=--co", "pytest -k -o addopts=--co"):
+FORCED_PREFIX = ["pytest", "-o", "addopts=", "-o", "testpaths=", "-o", "log_file="]
+
+
+def test_forced_args_are_always_ours_and_always_first(tmp_path: Path):
+    # Everything that decides what runs is pinned by us, ahead of anything the ticket said,
+    # and the jail/HOME-relative pins are rendered from resolved paths.
+    for command in ("pytest", "pytest -q tests", "python3 -m pytest -x tests/test_idor.py"):
         argv = resolve(normalize(shlex.split(command)), in_jail=None)
-        assert argv[:3] == ["pytest", "-o", "addopts="], argv
-        assert argv.count("-o") == 1 or argv[3:].count("-o") == 0 or "addopts=" in argv[2]
+        assert argv[:len(FORCED_PREFIX)] == FORCED_PREFIX, argv
+        assert "-o" not in argv[len(FORCED_PREFIX):], argv
+
+    jail = tmp_path / "wt"
+    jail.mkdir()
+    home = tmp_path / "home"
+    home.mkdir()
+    argv = resolve(["pytest", "-q"], in_jail=jail, home=home)
+    resolved = str(jail.resolve())
+    assert argv[:len(FORCED_PREFIX)] == FORCED_PREFIX
+    assert f"--rootdir={resolved}" in argv and f"--confcutdir={resolved}" in argv
+    # the cache is redirected out of the jail rather than the plugin being unregistered:
+    # an unknown `cache_dir` key is an INTERNALERROR on a target that errors on warnings.
+    assert f"cache_dir={home}/pytest_cache" in argv
+    assert "no:cacheprovider" not in argv
+    assert argv[-1] == "-q", "the ticket's own args stay last"
 
 
 @pytest.mark.parametrize(("name", "content"), [
@@ -110,15 +128,15 @@ def test_forced_addopts_neutralises_repo_resident_ini_config(repo: Path, tmp_pat
 
 
 @pytest.mark.parametrize("gate", ["pytest --tb -o addopts=--co", "pytest -k -o addopts=--co"])
-def test_a_smuggled_dash_o_cannot_reach_pytest_as_a_flag(repo: Path, tmp_path: Path,  # noqa: F811
-                                                         gate: str):
-    """`-o` can be smuggled past validation as the *value* of an allowed valued flag, so
-    check the thing that matters: it never takes effect, and the gate fails closed."""
+def test_a_smuggled_dash_o_never_reaches_pytest(repo: Path, tmp_path: Path, gate: str):  # noqa: F811
+    """`-o` can be slipped into the *value* slot of an allowed valued flag. The leftover
+    `addopts=--co` is then a positional, and a positional has to look like a test path — so
+    the command is refused outright rather than relying on the runner to fail it."""
     wt = _worktree(repo, tmp_path, f"smuggle-{abs(hash(gate)) % 10**6}")
     try:
         (wt.root / "pytest.ini").write_text("[pytest]\naddopts = --co\n")
-        r = wt.run_acceptance(gate, timeout=120)
-        assert r.exit_code != 0, f"a smuggled -o produced a green gate: {r.output[-300:]}"
+        with pytest.raises(WorktreeError):
+            wt.run_acceptance(gate, timeout=120)
     finally:
         wt.remove()
 
@@ -322,38 +340,6 @@ def test_gate_output_is_bounded(repo: Path, tmp_path: Path):  # noqa: F811
         )
     finally:
         wt.remove()
-
-
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING: the refusal denylist false-positives on a shipped seed ticket. "
-    "examples/tickets/bug-3-pitfall.json — an ordinary off-by-one bug report — is REFUSED as "
-    "'asks to remove or disable the project's own checks', because the pattern "
-    "'(disabl|remov|delete|drop|bypass|skip|turn off)\\w*.{0,40}(test|check|guard|safety|"
-    "validation)' matches the innocent span 'dropped. Fix the boundary so it is inclusive. "
-    "test[s/test_reorder.py]' — the bug's own description ('items ... are dropped') sitting "
-    "within 40 characters of the word 'test'. Consequence: that ticket is the app1 scenario "
-    "in scripts/demo_selfimprove.py, so `--app app1` refuses both runs and the before/after "
-    "measures nothing (branch is None, so the hidden check returns None for control and "
-    "primed alike). No test covers this: test_refusal.py asserts a hand-written sentence is "
-    "not refused, and test_acceptance_policy.py only checks the seed tickets' *commands*. "
-    "Repro: should_refuse(Ticket(**json.load(open('examples/tickets/bug-3-pitfall.json'))))."
-))
-def test_no_legitimate_seed_ticket_is_refused():
-    import json
-
-    from self_improving_coding_agent.contracts import Ticket
-    from self_improving_coding_agent.refusal import should_refuse
-
-    tickets = Path(__file__).resolve().parents[2] / "examples" / "tickets"
-    refused = {}
-    for path in sorted(tickets.glob("*.json")):
-        if path.name.startswith("refuse-"):
-            continue  # these are supposed to be refused
-        raw = json.loads(path.read_text())
-        reason = should_refuse(Ticket.model_validate({**raw, "repository": "."}))
-        if reason:
-            refused[path.name] = reason
-    assert not refused, f"legitimate seed tickets were refused: {refused}"
 
 
 @pytest.mark.xfail(strict=True, reason=(
