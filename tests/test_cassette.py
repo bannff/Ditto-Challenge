@@ -12,8 +12,8 @@ import json
 from typing import Any
 
 import pytest
-from tests.test_model_record import FakeModel
 
+from _doubles import FakeModel
 from self_improving_coding_agent.cassette import (
     HEADER,
     Cassette,
