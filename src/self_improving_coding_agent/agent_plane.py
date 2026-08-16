@@ -27,6 +27,7 @@ def build_agent(
     steering_prompt: str | None = None,
     shared_tools: list | None = None,
     extra_plugins: list | None = None,
+    hooks: list | None = None,
 ) -> Agent:
     plugins = []
     if skill_paths:
@@ -40,6 +41,7 @@ def build_agent(
         system_prompt=spec.system_prompt,
         tools=[*spec.tools, *(shared_tools or [])],
         plugins=plugins,
+        hooks=list(hooks or []),
     )
 
 
@@ -53,6 +55,7 @@ def build_node_agents(node: NodeConfig, models: Mapping[str, Model]) -> list[Age
             steering_prompt=node.steering_prompt,
             shared_tools=node.shared_tools,
             extra_plugins=node.extra_plugins,
+            hooks=node.hooks,
         )
         for spec in node.agents
     ]

@@ -322,7 +322,22 @@ def _assemble(gates: list[_GateNode], ctx: _RunContext) -> WorkflowResult:
     ran = [g for g in gates if g.attempts > 0]
     result.verdicts = list(ctx.verdicts)
     result.outputs = dict(ctx.outputs)
-    result.degraded = any(g.degraded for g in ran)
+
+    # A gate whose last verdict failed, yet never spent its retries, was abandoned between
+    # attempts — the deadline ran out mid-ladder. The gate itself never saw that, so it
+    # recorded neither the failed verdict nor a FAILED state. Without this, such a run
+    # reports SUCCESS on an unverified final attempt.
+    recorded = {id(v) for v in ctx.verdicts}
+    abandoned = [
+        g for g in ran if not g.degraded and g.verdict is not None and not g.verdict.passed
+    ]
+    for gate in abandoned:
+        verdict = gate.verdict
+        if verdict is not None and id(verdict) not in recorded:
+            result.verdicts.append(verdict)
+        _emit(ctx.status_cb, gate.config.name, NodeState.FAILED)
+
+    result.degraded = bool(abandoned) or any(g.degraded for g in ran)
     if not result.degraded and len(ran) < len(gates):
         # No node tripped its breaker but the graph stopped early: the deadline ran out
         # between nodes. Mark the first node that never got to run.

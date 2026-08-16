@@ -234,6 +234,12 @@ class Worktree:
     def diff(self) -> str:
         return _git(self.root, "diff", "HEAD").stdout
 
+    def head_hash(self) -> str | None:
+        """The commit this worktree points at. Recorded in ledger blocks so the chain
+        references real, restorable state instead of keeping its own copy of it."""
+        r = _git(self.root, "rev-parse", "HEAD")
+        return (r.stdout.strip() or None) if r.returncode == 0 else None
+
     def commit(self, message: str) -> bool:
         """Commit all changes to the run branch. Returns False if there was nothing to commit."""
         if self.is_clean():
