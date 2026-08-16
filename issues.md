@@ -10,40 +10,94 @@ verified; they stay on the list so the history is legible. Every item has a test
 
 ## Fix order
 
-1. **#1 `@argfile`** — critical, one line, defeats every other control in the gate.
-2. **#2 `.git` write → shell RCE** — high, ~3 lines.
-3. **#3 regression: a shipped ticket is refused** — breaks a graded demo.
+1. ~~**#1 `@argfile`**~~ — done (and it grew: see the four sub-findings under it).
+2. ~~**#2 `.git` write → shell RCE**~~ — done; surfaced **#2b/#2c/#2d**, and closed #6 en route.
+3. **#2b agent-written ini reaches outside the jail** — high. **NEXT.**
+4. **#3 regression: a shipped ticket is refused** — breaks a graded demo.
 4. **#4 empty PATH**, **#5 predictable worktrees base**, **#6 git HOME lies**, **#7 stray
    processes** — one-to-three lines each; #4 and #5 were introduced by the last pass.
 5. **#8 unbounded output**, **#9 audit gap**, **#10 forgeable output**, **#12 lesson hygiene**.
 6. **#11 conftest owns the verdict**, **#13 no FS/egress sandbox** — need design answers, not
    more argv validation.
 
-## 1. CRITICAL — `pytest @argfile` bypasses the entire flag allowlist
+## ~~1. CRITICAL — `pytest @argfile` bypasses the entire flag allowlist~~ FIXED
 
-pytest sets `fromfile_prefix_chars="@"`, so a token starting with `@` is not a flag to us but
-*is* an argv splice to pytest. `@opts.txt` looks like a positional, resolves inside the jail,
-and is allowed — then pytest reads the file and inserts its lines as options. Verified on a
-fully red suite: `pytest -o addopts= -q @opts.txt tests` → **exit 0** with `--collect-only`
-inside the file. A later `-o addopts=…` in the file also overrides our forced one. So `--co`,
-`-p`, `--rootdir`, `-c` are all back, and `write_file` can author the argfile inside the
-worktree.
-Also an out-of-jail **read**: `pytest @/tmp/creds` puts the file's contents into pytest's error
-message → `output_tail` → the ledger (`scrub_text` blunts but doesn't guarantee).
-**Fix:** refuse a positional starting with `@`; better, add `positional_pattern` to
-`RunnerPolicy` and require positionals to match before the path check — the field the last pass
-dismissed as "harmless today". It wasn't.
+~~pytest sets `fromfile_prefix_chars="@"`, so a token starting with `@` was an argv splice: it
+looked like a positional to us, resolved inside the jail, and pytest then inserted the file's
+lines as options. Verified on a red suite: `@opts.txt` containing `--collect-only` → **exit 0**,
+and a later `-o addopts=` in the file overrode our forced one. Also an out-of-jail read
+(`pytest @/tmp/creds` echoed the contents into the ledger via pytest's error output).~~
+**Fixed**, and re-review of the fix found two more holes in the same surface, both also fixed:
+- ~~`@` was only dangerous in positionals~~ — argparse expands argfiles across the **whole**
+  argv, recursively, so `-k @file` splices too. Now refused on every token, plus the attached
+  `--flag=@file` spelling (inert today, refused anyway rather than trusting the runner).
+- ~~**Positionals were fail-open**~~ — "not a flag" meant "treat as a path". Replaced
+  `allows_paths` with `positional_pattern`: a row opts in by declaring what a path *is*, so
+  `''`, `a=b`, `tests;id`, `tests/*.py`, `~/.ssh` are refused by shape.
+- ~~**F1: an unresolved absolute positional defeated `--confcutdir`.**~~ `_check_path` validated
+  the resolved path but we executed the token as written, and pytest doesn't resolve symlinks —
+  so `pytest /tmp/<jail>/tests` (macOS `/tmp`, or a symlinked base) sat outside a resolved
+  confcutdir and pulled in an ancestor's `conftest.py`. Positionals are now rewritten to the
+  canonical jail-relative path we actually checked.
+- ~~**F2: `--rootdir` doesn't stop ini discovery.**~~ pytest still walked up to find a config
+  file; an ancestor ini needs only `pythonpath` to put attacker directories on `sys.path`
+  (verified: red suite → exit 0, outside module imported). The gate now pins `-c` to the
+  target's own config when it has one (`pytest.ini` / `pyproject.toml` / `tox.ini` /
+  `setup.cfg`, checked for a real pytest section) and otherwise to an empty ini in the run's
+  own HOME. Verified: a target's `pyproject.toml` markers are still honoured.
 
-## 2. HIGH — `.git` is inside the jail, making `write_file` a code-execution primitive
+Effective argv is now
+`pytest -o addopts= -o testpaths= -p no:cacheprovider -c <config> --rootdir=<jail> --confcutdir=<jail> …`.
+All 29 legitimate forms and all 7 seed tickets unaffected; `@` regression tests added (they
+were missing entirely, which the fix review caught).
 
-`safe_path` is pure containment, so `<root>/.git` is "inside" and allowed. In a linked worktree
-`.git` is a *file* (a gitdir pointer). Overwrite it and every later `_git()` call targets a repo
-the agent controls. `_GIT_HARDENING` blocks hooks/fsmonitor/`protocol.ext` but **not `filter.*`
-/ `diff.*.textconv`, which git runs through `/bin/sh`**. Reproduced end to end with only
-`safe_path`-legal writes: our own `git add -A` executed an attacker command. `core.worktree`
-also aims `revert()`'s `reset --hard` / `clean -fd` outside the worktree. Pre-existing.
-**Fix:** refuse any path with a `.git` component (case-folded) in `safe_path`; optionally pass
-`--git-dir <real gitdir>` on every `_git` call so a clobbered pointer is inert.
+## ~~2. HIGH — `.git` is inside the jail, making `write_file` a code-execution primitive~~ FIXED
+
+~~`safe_path` was pure containment, so `<root>/.git` was "inside" and allowed. In a linked
+worktree `.git` is a *file* (a gitdir pointer): overwrite it and every later `_git()` call
+targets a repo the agent wrote, where `filter.*.clean` and `diff.*.textconv` run through
+`/bin/sh`. Reproduced with only `write_file` calls — our own `git add -A` executed an attacker
+command. `core.worktree` also aimed `revert()`'s `clean -fd` at a directory outside the
+worktree (verified: it deleted a file out there), and a clobbered pointer made
+`worktree remove` fail, stranding the worktree.~~
+**Fixed with two independent controls**, because either alone leaves the other route open:
+- the file tools refuse any path with a `.git` component, case-folded and at any depth
+  (`casefold` is required, not paranoia: APFS is case-insensitive while `resolve()` keeps the
+  spelling, so `.GIT/config` opened `.git/config`);
+- every in-worktree git call pins `--git-dir`/`--work-tree` to the gitdir recorded at creation,
+  so a pointer written by something *other* than the agent (gate code runs as our uid) is inert
+  and `core.worktree` cannot re-aim anything. `remove()` also restores the pointer and retries.
+`_GIT_HARDENING` gained `core.excludesFile=/dev/null` and `core.attributesFile=/dev/null`,
+which also closes #6. 27 regression tests; 11 legitimate `.git*` forms (`.gitignore`,
+`.gitattributes`, `.github/workflows/…`, `src/git/plumbing.py`) verified unaffected.
+**Residual:** with the gitdir pinned, git reads the *target repo's own* local config, which we
+don't author and git has no flag to ignore. A hostile repo shipped with `filter.*` already set
+still executes — same class as #13 (we run the target's code by design).
+
+## 2b. HIGH (new) — `_gate_config()` adopts an agent-written ini that reaches outside the jail
+
+Found while fixing #2. `_gate_config()` prefers the target's own config, but the agent can
+*write* that config. Two keys escape:
+- `log_file = /outside/x.log` — pytest **creates and truncates** it. Verified: gate rc 0, file
+  created outside the worktree. An in-jail write becomes an out-of-jail write.
+- `pythonpath = /outside` — verified an outside module was imported and executed by the gate.
+  `-o addopts=`/`testpaths=` are forced; `pythonpath` is not.
+**Fix:** force `-o pythonpath=` (check the bundled targets first) and either force
+`-o log_file=` or prefer our own empty ini when the agent authored the file.
+
+## 2c. MEDIUM (new) — an agent-written `.gitignore` hides a file from our own evidence
+
+`write_file(".gitignore", "stash.py")` + `write_file("stash.py", …)`: `is_clean()` returns True,
+the file is absent from the diff, it isn't committed, and `clean -fd` leaves it on disk. So a
+"verified" branch can omit a file the gate relied on. Sibling of #6 but from *inside* the jail,
+so `core.excludesFile` doesn't reach it.
+**Fix:** use `status --porcelain --ignored` (or `add -Af`) when deciding cleanliness/evidence.
+
+## 2d. LOW (new) — a tool escape crashes instead of refusing
+
+`write_file("service.py/evil.py")` raises `FileExistsError` out of the tool, contradicting the
+tools.py docstring ("escapes return an error string instead of crashing"). Same class as the
+NUL crash: an unexpected exception type escaping the tool boundary.
 
 ## 3. REGRESSION — a legitimate shipped ticket is refused, and it breaks a demo
 
