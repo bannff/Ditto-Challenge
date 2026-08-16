@@ -36,6 +36,18 @@ incomplete work, or a red/unrunnable gate degrades safely: the change is reverte
 report explains why. Only a completed workflow with a green acceptance gate retains its
 branch.
 
+A retry also resets the workspace. When a stage passes its evaluator checkpoint its tree is
+committed to a private `refs/autodev/checkpoints/<run_id>` — never a branch, so it is not a
+merge target — and a failed attempt is rolled back to that checkpoint before the next one
+begins. Without this, an informed retry inherits the previous attempt's half-applied edits
+and diagnoses a tree nobody intended. Reverting anchors to the commit the run started from
+rather than to `HEAD`, because once a checkpoint exists `HEAD` *is* that checkpoint and
+`reset --hard HEAD` would preserve the change it is meant to discard. These commits pass an
+evaluator checkpoint, not the acceptance gate, and say so in their message; shipping squashes
+them into a single commit so a retained branch carries exactly the change under one honest
+message, and a run that is reverted also drops its checkpoint ref so rejected work is not
+left reachable in the target's object store.
+
 The boundary is worktree confinement plus credential isolation, not an OS filesystem or
 egress sandbox. Production execution would put the same workflow in a no-egress container
 or microVM with scoped credentials.
@@ -75,6 +87,23 @@ the writer is trusted, and an attacker able to forge evidence at the source can 
 chain-valid bundle. A verified chain also gates learning: altered, incomplete, or
 breaker-tripped runs cannot write lessons; a complete honest failure can.
 
+Each model call records three digests — the conversation, the system prompt, and the response
+— and no payload, because a prompt carries repository source, ticket text, and the lessons
+recalled from memory. Hashing the system prompt apart from the conversation is what lets
+divergence be read: memory grows between runs, so a changed system digest under an unchanged
+conversation digest means priming moved rather than behaviour.
+
+`autodev recover <run_id>` is the path that reads the recorded git hashes back, and it splits
+the question deliberately. Git's checkpoint ref names *which* commit is recoverable, since the
+ref store is written by the workflow and never by the ledger; the chain decides *whether* it
+may be used, supplying the run's seed — which after the run exists nowhere else — for an
+ancestry check and corroborating that the commit is one it recorded. Two independent stores
+must agree, and contradiction refuses. It reports rather than materializes: a recovered tree
+is agent-authored content derived from an untrusted ticket, so writing it out for someone
+means the next test run in that directory executes code the agent wrote. Recovery is
+short-horizon by design — only the most recent checkpoint refs are kept and git reclaims the
+rest — so it is a rollback aid, not an archive.
+
 ## Learning policy
 
 Before planning, Discover retrieves relevant durable lessons. Learn distills at most one
@@ -89,7 +118,10 @@ result.
 At production scale, a coordinator would schedule isolated runs with cost ceilings and
 retained reports; a promotion path would add deploy, verify, and rollback after the repository
 gate. The implementation deliberately excludes deployment infrastructure, containers, auth,
-UI, crash-resume, and signed blocks. Optional fixture-only cassette re-execution exists for
-review, not as production crash recovery. Those cuts keep the evaluation focused on the CLI's
-enforceable trust boundary, test gate,
-bounded recovery, evidence, and measurable learning.
+UI, crash-resume, and signed blocks. Recovery reports the last checkpointed tree and leaves
+materializing it to the operator; it does not resume an interrupted run, and signing blocks
+with a per-node key — the change that would make the chain authenticate origin rather than
+only detect edits — is named here rather than built. Optional fixture-only cassette
+re-execution exists for review, not as production crash recovery. Those cuts keep the
+evaluation focused on the CLI's enforceable trust boundary, test gate, bounded recovery,
+evidence, and measurable learning.
