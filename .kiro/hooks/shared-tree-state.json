@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Shared tree state at session start",
+      "trigger": "SessionStart",
+      "description": "Injects branch, recent commits, and any uncommitted work into every new session, so a fresh tab knows what other tabs have in flight before it edits or stages anything. Several short-lived sessions share one working tree, which has one git index and one HEAD, so uncommitted work is the shared hazard.",
+      "action": {
+        "type": "command",
+        "command": "bash scripts/session-context.sh",
+        "timeout": 15
+      }
+    }
+  ]
+}
