@@ -15,6 +15,7 @@ flip to failures the moment the hole is closed, which is the signal to delete th
 
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import subprocess
@@ -37,7 +38,7 @@ from test_hostile_tickets import (  # the shared harness lives next door
 
 from self_improving_coding_agent.acceptance_policy import normalize, resolve
 from self_improving_coding_agent.contracts import Outcome
-from self_improving_coding_agent.settings import get_settings
+from self_improving_coding_agent.settings import _default_worktrees_dir, get_settings
 from self_improving_coding_agent.worktree import Worktree, WorktreeError
 
 TMP = Path(get_settings().worktrees_dir).parent
@@ -282,22 +283,26 @@ def test_repo_resident_conftest_cannot_decide_the_gates_verdict(repo: Path, tmp_
     assert report.branch is None, "an unverified change landed on a branch"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING: the process group is only killed when the gate TIMES OUT, so a gate that "
-    "exits cleanly leaves whatever it spawned running — indefinitely, outside every budget, "
-    "after the run is reported done. This is strictly broader than the known setsid escape "
-    "(issues.md #7): no setsid is needed and no timeout is involved, which is why the "
-    "existing process-group test does not see it. The innocent version is a fixture that "
-    "starts a background server; the hostile version is a sleeper that outlives the report. "
-    "Repro: a test that Popen's a detached child and returns; the gate exits 0 and the child "
-    "is still alive well after run() returned. Fix: _kill_group(proc) in a finally on every "
-    "path, not just the TimeoutExpired branch."
-))
+@pytest.mark.parametrize("stubborn", [False, True])
 def test_a_clean_gate_exit_does_not_leave_background_processes_running(repo: Path,  # noqa: F811
-                                                                      tmp_path: Path):
+                                                                      tmp_path: Path,
+                                                                      stubborn: bool):
+    """A gate that exits 0 must not leave its children running.
+
+    Strictly broader than the `setsid` escape: no setsid, no timeout. The innocent version is a
+    fixture that starts a background server; the hostile one is a sleeper meant to outlive the
+    report. `_kill_group` in a `finally` is *not* sufficient for the hostile case — it waits on
+    the child, and a reaped child returns from `wait()` at once, so it sends SIGTERM and returns
+    while a survivor that ignores SIGTERM lives on. Hence the `stubborn` parameter, and hence
+    `_sweep_group` polling the group rather than the child.
+    """
     survived = tmp_path / "BACKGROUND_SURVIVED"
+    ignore_term = (
+        "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" if stubborn else ""
+    )
     child_src = (
         "import pathlib, time\n"
+        f"{ignore_term}"
         "time.sleep(6)\n"
         f"pathlib.Path({str(survived)!r}).write_text('alive')\n"
     )
@@ -318,26 +323,48 @@ def test_a_clean_gate_exit_does_not_leave_background_processes_running(repo: Pat
     assert not survived.exists(), "a background process outlived the run that started it"
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING: gate output is unbounded. `run()` reads the whole temp file into one str "
-    "before anything truncates it (`output_tail=r.output[-2000:]` happens later, in the "
-    "workflow), so a gate that prints a lot drives our RSS and the temp filesystem with it. "
-    "Observed: a gate writing ~300MB to stdout returns a 300,299,999-character string in "
-    "0.8s; nothing in the run bounds it. The TemporaryFile change fixed the post-timeout "
-    "hang but moved the same unbounded read onto disk as well as memory. 'Bounded runs' is a "
-    "hard requirement and output is the one budget with no ceiling. Fix: seek to the last N "
-    "bytes instead of reading the file whole (and note the truncation in the tail)."
-))
 def test_gate_output_is_bounded(repo: Path, tmp_path: Path):  # noqa: F811
+    """"Bounded runs" has to cover what we read back, not only how long we wait.
+
+    Both ends are kept, and each earns its place: the tail carries pytest's verdict and the
+    failing assertions, the head carries `rootdir`/plugins/`collected N` — which is what tells a
+    reader the gate ran the thing it was meant to. The gap is announced so a truncated excerpt
+    can't be mistaken for the whole output.
+    """
     wt = _worktree(repo, tmp_path, "loud-gate")
     try:
         r = wt.run(["python3", "-c",
-                    "import sys\nline='A'*1000+'\\n'\n"
-                    "for _ in range(64000): sys.stdout.write(line)\n"], timeout=120)
+                    "import sys\nprint('HEADMARK')\nline='A'*1000+'\\n'\n"
+                    "for _ in range(64000): sys.stdout.write(line)\n"
+                    "print('TAILMARK')\n"], timeout=120)
         assert r.exit_code == 0
-        assert len(r.output) < 5_000_000, (
+        assert len(r.output) < 200_000, (
             f"run() held {len(r.output):,} characters of gate output in memory"
         )
+        assert "HEADMARK" in r.output and "TAILMARK" in r.output
+        assert "dropped" in r.output, "a truncated excerpt must say that it is one"
+    finally:
+        wt.remove()
+
+
+@pytest.mark.parametrize("pad", [0, 1])
+def test_gate_output_survives_a_multibyte_boundary(repo: Path, tmp_path: Path, pad: int):  # noqa: F811
+    """Either seam can land mid-codepoint, so both get exercised.
+
+    `é` is two bytes, so a one-byte prefix shifts every following character's alignment — with
+    `pad=0` the head cut at 4096 is codepoint-aligned and only the tail seam is interesting;
+    with `pad=1` it is the head's turn. Decoding with `errors="replace"` is what makes an
+    arbitrary byte offset safe, and the point here is that neither seam raises.
+    """
+    wt = _worktree(repo, tmp_path, f"utf8-gate-{pad}")
+    try:
+        r = wt.run(
+            ["python3", "-c", f"print('x' * {pad} + 'é' * 200_000)"],
+            timeout=120,
+        )
+        assert r.exit_code == 0
+        assert isinstance(r.output, str) and len(r.output) < 200_000
+        assert "dropped" in r.output
     finally:
         wt.remove()
 
@@ -368,31 +395,53 @@ def test_the_recorded_command_reproduces_the_gates_verdict(repo: Path, tmp_path:
     )
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "FINDING: the new worktrees_dir default is a predictable name in a shared directory, and "
-    "nothing checks who owns it. `Path(tempfile.gettempdir()) / 'autodev-worktrees'` is "
-    "per-user and 0700 on macOS, but on Linux/CI/containers TMPDIR is usually unset, so "
-    "gettempdir() is '/tmp' and the default becomes the fixed path '/tmp/autodev-worktrees' "
-    "inside a world-writable sticky dir (verified: `env -u TMPDIR python -c` prints exactly "
-    "that). ensure_dirs() does `mkdir(parents=True, exist_ok=True)` with no ownership or "
-    "symlink check, and Worktree.create() resolves base_dir before its containment check, so "
-    "a base dir another local user pre-created as a symlink is silently adopted and every "
-    "worktree — target source, our diffs, and the tree the gate executes — lands where they "
-    "choose. That is a write foothold inside the jail we are about to run tests in. The old "
-    ".data/worktrees default was inside our own repo and had none of this exposure, so this "
-    "is new with the move. Fix: include the uid in the name and create mode=0o700, or use "
-    "mkdtemp; and refuse a base_dir that is a symlink or not owned by us. Repro below."
-))
 def test_a_symlinked_worktrees_base_is_not_adopted(repo: Path, tmp_path: Path):  # noqa: F811
+    """A base directory someone else pre-created is refused, not adopted.
+
+    With TMPDIR unset — Linux, CI, most containers — `gettempdir()` is plain `/tmp`, so a fixed
+    `autodev-worktrees` there is a name any local user can guess and create first. If they make
+    it a symlink, every worktree (target source, our diffs, the tree the gate then *executes*)
+    lands where they chose. Refused rather than repaired: chmod-ing a directory someone else
+    made would take ownership of whatever they already put in it.
+
+    Asserted with `raises`, which is why this is no longer a strict xfail — a test whose
+    property is "this call fails" can never flip by passing.
+    """
     elsewhere = tmp_path / "attacker_controlled"
     elsewhere.mkdir()
     base = tmp_path / "worktrees-base"
     base.symlink_to(elsewhere, target_is_directory=True)  # pre-created by someone else
-    wt = Worktree.create(repo, "symlinked-base", base)
+    with pytest.raises(WorktreeError, match="not a real directory"):
+        Worktree.create(repo, "symlinked-base", base)
+    assert not list(elsewhere.iterdir()), "something was written into the attacker's directory"
+
+
+def test_a_world_writable_worktrees_base_is_refused(repo: Path, tmp_path: Path):  # noqa: F811
+    """Ours is not enough; it also has to be private. A 0777 directory we own is still a
+    directory anyone can drop a file into, and the gate executes what is in there."""
+    base = tmp_path / "loose-base"
+    base.mkdir(mode=0o777)
+    with pytest.raises(WorktreeError, match="writable by others"):
+        Worktree.create(repo, "loose-base-run", base)
+
+
+def test_a_fresh_worktrees_base_is_created_private(repo: Path, tmp_path: Path):  # noqa: F811
+    """`mkdir(mode=…, exist_ok=True)` does not change an existing directory's mode, so the
+    create has to be the thing that sets 0700 — and `ensure_dirs()` must not get there first
+    under the ambient umask, or every run would refuse its own base."""
+    base = tmp_path / "fresh-base"
+    assert not base.exists()  # the create below is what has to set the mode
+    wt = Worktree.create(repo, "fresh-base-run", base)
     try:
-        landed_in_attacker_dir = elsewhere in wt.root.parents or elsewhere == wt.root.parent
-        assert not landed_in_attacker_dir, (
-            f"the worktree was created under a symlinked base: {wt.root}"
-        )
+        assert base.lstat().st_mode & 0o777 == 0o700, oct(base.lstat().st_mode & 0o777)
+        assert wt.root.parent == base.resolve()
     finally:
         wt.remove()
+
+
+def test_the_default_worktrees_base_is_not_a_guessable_shared_name():
+    """The uid goes in the *default* only. An explicit override is honoured verbatim — the
+    ownership check, not the name, is what makes an override safe."""
+    default = _default_worktrees_dir()
+    assert str(os.geteuid()) in default.name
+    assert default.is_absolute()

@@ -6,6 +6,7 @@ values in this file. If a true secret is ever added, wrap it in pydantic.SecretS
 
 from __future__ import annotations
 
+import os
 import tempfile
 from functools import lru_cache
 from pathlib import Path
@@ -15,6 +16,18 @@ from botocore.config import Config
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from strands.models import BedrockModel
+
+
+def _default_worktrees_dir() -> Path:
+    """A worktrees base nobody else can guess, outside this repo.
+
+    Outside the repo because a test runner walks up from its rootdir looking for config, and a
+    worktree under our own tree would let the gate load *this* project's pyproject/conftest
+    instead of the target's. Per-uid because `gettempdir()` is plain `/tmp` whenever TMPDIR is
+    unset (Linux, CI, containers), where a fixed name is pre-creatable by any local user.
+    """
+    suffix = f"-{os.geteuid()}" if hasattr(os, "geteuid") else ""
+    return Path(tempfile.gettempdir()) / f"autodev-worktrees{suffix}"
 
 # Adaptive retries absorb Bedrock throttling when graph nodes run concurrently;
 # a wider pool avoids connection starvation across a swarm's agents.
@@ -39,7 +52,11 @@ class Settings(BaseSettings):
     # Worktrees live OUTSIDE this repo, and the default is absolute: a test runner walks up
     # from its rootdir looking for config, so a worktree under our own tree would let the
     # gate load this project's pyproject/conftest instead of the target's.
-    worktrees_dir: Path = Field(default=Path(tempfile.gettempdir()) / "autodev-worktrees")
+    # The uid is in the *default* name, not forced onto an override: with TMPDIR unset
+    # gettempdir() is plain `/tmp`, so a fixed name there is a path any local user can guess
+    # and pre-create. An explicit WORKTREES_DIR is honoured verbatim — but either way
+    # Worktree.create vets the directory's ownership and mode before using it.
+    worktrees_dir: Path = Field(default_factory=lambda: _default_worktrees_dir())
     # Recording model I/O for replay is only permitted against repos under this root, and
     # only when it is explicitly set. Unset means recording is off — fail-closed, because a
     # cassette holds unredacted prompts (repo source, ticket text, primed lessons) and no
@@ -77,7 +94,10 @@ class Settings(BaseSettings):
         return self.data_dir / "cassettes"
 
     def ensure_dirs(self) -> None:
-        for p in (self.chroma_dir, self.mem0_dir, self.sessions_dir, self.worktrees_dir):
+        # worktrees_dir is deliberately absent: it has to be created 0700 and then verified as
+        # ours, which Worktree.create does per run. Creating it here under the ambient umask
+        # would make it 0755 and every later run would correctly refuse its own base.
+        for p in (self.chroma_dir, self.mem0_dir, self.sessions_dir):
             p.mkdir(parents=True, exist_ok=True)
 
 

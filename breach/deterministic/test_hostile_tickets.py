@@ -670,8 +670,13 @@ def test_a_bad_repository_path_fails_safely(repo: Path, tmp_path: Path, bad):
     ticket = Ticket(id="bad-repo", repository=target,
                     request="Fix the ownership check on the order read path",
                     acceptance_command=GREEN_GATE)
-    before = set(get_settings().worktrees_dir.iterdir())
+    # Created here rather than assumed: nothing pre-creates the base any more (ensure_dirs
+    # deliberately skips it, since it has to be 0700 and vetted per run), so reading it first
+    # made this test pass only when an earlier test in this file happened to run before it.
+    base = get_settings().worktrees_dir
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    before = set(base.iterdir())
     with _stubbed_graph(), pytest.raises(WorktreeError):
         _invoke(ticket, Ledger(tmp_path / "ledger.db"))
-    assert set(get_settings().worktrees_dir.iterdir()) == before  # no partial worktree
+    assert set(base.iterdir()) == before  # no partial worktree
     assert _autodev_branches(repo) == []

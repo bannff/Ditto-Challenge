@@ -15,11 +15,14 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import tempfile
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from typing import IO
 
 from .acceptance_policy import (
     POLICIES,
@@ -56,6 +59,19 @@ MAX_COMMIT_BYTES = 8 * 1024 * 1024
 # One `write_file` call. Large enough for any real source file, small enough that a ticket
 # which talks the agent into generating data cannot pack it into the target's history.
 MAX_WRITE_BYTES = 256 * 1024
+# And one `read_file` call, so a large file the gate dropped in the jail can't be poured into
+# the model's context. Same number: what we'll write is what we'll read.
+MAX_READ_BYTES = 256 * 1024
+
+# What we keep of a gate's output. The only consumer takes the last 2000 characters, so this is
+# ~32x headroom rather than a guess; the head is kept because a gate that ran the wrong thing
+# says so in its first few lines (rootdir, plugins, collected N).
+_OUTPUT_HEAD_BYTES = 4 * 1024
+_OUTPUT_TAIL_BYTES = 60 * 1024
+
+# How long a sweep waits for a process group to drain before escalating to SIGKILL. Short: on a
+# clean run the group is already empty and this is never reached.
+_SWEEP_GRACE_SECONDS = 0.5
 
 # A run id becomes a path component and a ref name, so it is validated before it reaches
 # either. Canonical in contracts because the ledger and cassette paths need the same
@@ -146,6 +162,50 @@ class WorktreeError(RuntimeError):
     pass
 
 
+def _private_base(base: Path) -> Path:
+    """The worktrees base, guaranteed to be a real directory that only we can write.
+
+    The default lives under the system temp dir, which is per-user and 0700 on macOS but is
+    plain `/tmp` whenever TMPDIR is unset — Linux, CI, most containers. That made
+    `/tmp/autodev-worktrees` a predictable name in a world-writable directory, created with
+    `mkdir(exist_ok=True)` and no checks, so another local user could pre-create it as a symlink
+    and have every worktree land where they chose: a write foothold inside the tree the gate
+    then executes.
+
+    Three deliberate choices:
+
+    - `lstat`, not `stat`: a symlink must fail the "is a directory" test rather than be followed.
+    - no `exist_ok` on the create: if someone wins the race to create it, we refuse instead of
+      adopting their directory.
+    - refuse, never repair. `chmod`-ing a directory someone else made would take ownership of
+      whatever they already put inside it, and `mkdir(mode=…, exist_ok=True)` doesn't even
+      change the mode of an existing directory — so "fixing" it would be a no-op that reads
+      like a fix.
+
+    Checked per run rather than once at startup, because the base can be swapped in between.
+    The residual is the usual lstat-then-use window; what really closes it is the sticky bit on
+    `/tmp`, plus the uid in the default name so the ordinary case is a path nobody else guesses.
+    """
+    try:
+        info = base.lstat()
+    except FileNotFoundError:
+        base.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            base.mkdir(mode=0o700)
+        except FileExistsError as e:
+            raise WorktreeError(f"worktrees base appeared underneath us: {base}") from e
+        info = base.lstat()
+    if not stat.S_ISDIR(info.st_mode):
+        raise WorktreeError(f"worktrees base is not a real directory: {base}")
+    # POSIX-only, like the rest of this module (killpg, SIGKILL, start_new_session).
+    if hasattr(os, "geteuid"):
+        if info.st_uid != os.geteuid():
+            raise WorktreeError(f"worktrees base is not owned by this user: {base}")
+        if info.st_mode & 0o077:
+            raise WorktreeError(f"worktrees base is writable by others: {base}")
+    return base
+
+
 class WorktreeEscape(WorktreeError):
     """Raised when a path or operation tries to leave the worktree."""
 
@@ -162,14 +222,24 @@ def _isolated_home() -> str:
     return _ISOLATED_HOME
 
 
+def _absolute_only(raw: str) -> str:
+    return os.pathsep.join(p for p in raw.split(os.pathsep) if os.path.isabs(p))
+
+
 def _safe_path_entries() -> str:
-    """PATH with relative entries dropped.
+    """PATH with relative entries dropped, and never empty.
 
     Children run with cwd inside the worktree, so a relative (or empty) PATH component would
-    let the target repo's own `./pytest` be the thing we execute.
+    let the target repo's own `./pytest` be the thing we execute. Dropping them left `""` when
+    the parent's PATH was unset or wholly relative, which is worse than not filtering: an empty
+    PATH makes the runner resolve against **cwd**, and a planted `./pytest` runs (verified).
+    Reachable under `env -i`, container entrypoints and systemd units.
+
+    The fallback is filtered too, rather than used as-is. `os.defpath` is `/bin:/usr/bin` on
+    this build, but it has historically been `:/bin:/usr/bin` — a leading empty entry, i.e. cwd
+    — so trusting the literal would silently re-arm the hole on a platform where it differs.
     """
-    entries = [p for p in os.environ.get("PATH", "").split(os.pathsep) if os.path.isabs(p)]
-    return os.pathsep.join(entries)
+    return _absolute_only(os.environ.get("PATH") or "") or _absolute_only(os.defpath)
 
 
 def _safe_env(home: str | None = None) -> dict[str, str]:
@@ -218,6 +288,73 @@ def _kill_group(proc: subprocess.Popen) -> None:
             return
         except subprocess.TimeoutExpired:
             continue
+
+
+def _read_excerpt(sink: IO[bytes]) -> str:
+    """A bounded excerpt of what the gate printed: the head, then the tail.
+
+    The whole file used to be read into one string — a gate emitting 300MB produced a
+    300M-character string — while the only consumer keeps `output[-2000:]`. "Bounded runs" has
+    to include what we read back, not just how long we wait.
+
+    Both ends, because each carries something the other doesn't. pytest's verdict and the
+    failing assertions are at the end, so a tail is what tells you *why* the gate failed; but
+    `rootdir`, the plugin list and `collected N items` are at the start, and those are what tell
+    you the gate ran the thing you meant. The gap is announced, so a truncated excerpt can't be
+    mistaken for the complete output.
+    """
+    size = sink.seek(0, os.SEEK_END)
+    if size <= _OUTPUT_HEAD_BYTES + _OUTPUT_TAIL_BYTES:
+        sink.seek(0)
+        return sink.read().decode("utf-8", "replace").strip()
+    sink.seek(0)
+    head = sink.read(_OUTPUT_HEAD_BYTES)
+    sink.seek(-_OUTPUT_TAIL_BYTES, os.SEEK_END)
+    tail = sink.read()
+    dropped = size - len(head) - len(tail)
+    # decode(errors="replace") is also what makes an arbitrary byte offset safe: landing
+    # mid-codepoint yields one U+FFFD and the rest decodes cleanly.
+    return "\n".join(
+        (
+            head.decode("utf-8", "replace").strip(),
+            f"[... {dropped} bytes of gate output dropped ...]",
+            tail.decode("utf-8", "replace").strip(),
+        )
+    )
+
+
+def _sweep_group(proc: subprocess.Popen) -> None:
+    """Clear out anything still in the child's process group, after the child itself is reaped.
+
+    Two reasons this is not just `_kill_group` again. First, it has to run on *every* path, not
+    only on timeout: a suite that starts a background helper and exits 0 leaves it alive
+    indefinitely, after the run has been reported done — no timeout and no `setsid` required.
+    Second, `_kill_group` cannot do this job, because it waits on `proc`, and a reaped child
+    returns from `wait()` instantly — so it sends SIGTERM and returns while a grandchild that
+    ignores SIGTERM lives on (verified). Progress has to be judged by polling the *group*.
+
+    Signalling a reaped child's pgid is safe while the group is non-empty: the kernel keeps the
+    pid reserved as long as it is a live process-group id. Once the group drains we stop, so the
+    only theoretical exposure is the final SIGKILL landing on a recycled pid that has meanwhile
+    become a group leader — two coincidences inside a 50ms window, not worth code. An empty
+    group raises ProcessLookupError in microseconds, which is the normal case, so a clean run
+    pays nothing.
+    """
+    if proc.pid == os.getpgrp():
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return  # nothing left in the group: the overwhelmingly common path
+    deadline = time.monotonic() + _SWEEP_GRACE_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        try:
+            os.killpg(proc.pid, 0)
+        except ProcessLookupError:
+            return
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
 
 
 @dataclass(frozen=True)
@@ -372,12 +509,14 @@ class Worktree:
         repo = Path(repo).resolve()
         if not (repo / ".git").exists():
             raise WorktreeError(f"{repo} is not a git repository")
-        base_dir = base_dir.resolve()
+        # Vetted *before* resolve(), which is the whole point: resolving first follows a
+        # symlinked base and then measures the attacker's directory instead of the one we
+        # were given. This also creates the base, so nothing else needs to pre-create it.
+        base_dir = _private_base(base_dir).resolve()
         root = (base_dir / run_id).resolve()
         if root.parent != base_dir:  # defense in depth against a crafted run_id
             raise WorktreeError(f"run_id escapes base dir: {run_id!r}")
         branch = f"{BRANCH_PREFIX}{run_id}"
-        base_dir.mkdir(parents=True, exist_ok=True)
         _git(repo, "worktree", "prune")  # clear any stale record so create is idempotent
         r = _git(repo, "worktree", "add", "-b", branch, str(root), "HEAD")
         if r.returncode != 0:
@@ -404,7 +543,10 @@ class Worktree:
         # write end open would make the post-timeout read block forever, and the wall-clock
         # bound is the point. start_new_session gives the child its own process group so a
         # timeout kills the tree; stdin is closed so nothing can wait on operator input.
-        with tempfile.TemporaryFile("w+", encoding="utf-8", errors="replace") as sink:
+        # Binary, not text mode: the bounded read below needs an end-relative seek, and a text
+        # stream refuses one ("can't do nonzero end-relative seeks"). Popen only wants a
+        # fileno(), so binary costs nothing and we decode the excerpt ourselves.
+        with tempfile.TemporaryFile() as sink:
             try:
                 proc = subprocess.Popen(
                     args,
@@ -424,8 +566,19 @@ class Worktree:
             except subprocess.TimeoutExpired:
                 timed_out = True
                 _kill_group(proc)
-            sink.seek(0)
-            output = sink.read().strip()
+            except BaseException:
+                # Ctrl-C is the reachable case, and it is the same leak #7 is about with an
+                # operator pulling the trigger instead of a hostile suite: `start_new_session`
+                # puts the child in its own session, so the terminal's SIGINT never reaches it
+                # and the whole gate tree would keep running after we unwound.
+                _kill_group(proc)
+                raise
+            finally:
+                # Before the read, not after. A survivor still holds the inherited write fd, so
+                # it can seek to 0 and rewrite what the gate printed — reading first would
+                # sample evidence that is still being edited.
+                _sweep_group(proc)
+            output = _read_excerpt(sink)
         if timed_out:
             return CommandResult(124, f"timed out after {timeout}s\n{output}".strip())
         return CommandResult(proc.returncode, output)
