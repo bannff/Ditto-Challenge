@@ -308,20 +308,29 @@ limit to us and let `SIGXFSZ` kill a concurrent ledger write.
 **Residual:** a gate can still fill the temp filesystem within its 300s wall-clock. Our *read* is
 bounded, which was the requirement.
 
-## 9. LOW — the recorded command doesn't reproduce the verdict
+## ~~9. LOW — the recorded command doesn't reproduce the verdict~~ FIXED
 
 `AcceptanceResult.command` stores the ticket's string while `resolve()` executes different argv
 (`-o addopts=` injected, `python -m pytest` rewritten). On a repo with `addopts = --co` the gate
 correctly reports exit 1 while the recorded command, run by hand, exits 0 — opposite answers on
 exactly the repo the forced arg defends against.
-**Fix:** record the effective argv; `resolve()` already returns it.
+**Fixed:** `CommandResult` now carries the argv that ran, and the report records that instead of
+the ticket's string. They differ by design — forced `-o` flags, a pinned `-c`, `python -m pytest`
+rewritten — and on a repo with `addopts = --co` they give *opposite* answers, so a reader
+reproducing a verdict by hand got the wrong one.
 
-## 10. LOW — the child can forge its own output
+## ~~10. LOW — the child can forge its own output~~ FIXED
 
 The sink is opened `w+` and inherited as fd 1, so the child can seek to 0 and overwrite what it
 printed (verified: real output replaced with "1 passed"). It cannot change the exit code, so the
 verdict holds, but the human-readable evidence is forgeable.
-**Fix:** give the child an append-only write fd; keep a separate read fd.
+**Fixed:** `O_APPEND` is set on the sink's file *description* before the child inherits it, so
+every write lands at the end whatever the writer seeks to. It has to be the description, not a
+reopened fd — that was tried first and silently didn't work, because `/dev/fd/N` yields a *new*
+description whose flags the child's copy doesn't share. Paired with #7's sweep-before-read, so
+output is finished growing before we sample it.
+**Residual:** a child still owns its stdout and can *append* noise; it can no longer erase what it
+already printed, which was the part that made the evidence forgeable.
 
 ## 11. The weakest link — repo-resident `conftest.py` decides the gate's verdict
 

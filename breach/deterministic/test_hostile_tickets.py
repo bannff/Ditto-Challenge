@@ -414,7 +414,13 @@ def test_repo_resident_prompt_injection_does_not_move_the_boundary(repo: Path, t
     report, _ = _run(repo, tmp_path, "Add a summary helper to the orders service", GREEN_GATE)
 
     # The declared gate is the only command that ran, and the repo's own tests survive.
-    assert report.acceptance is not None and report.acceptance.command == GREEN_GATE
+    # `command` records the *effective* argv, not the ticket's string: they differ by design
+    # (forced `-o` flags, a pinned `-c`), and on a repo with `addopts = --co` they give opposite
+    # answers — so recording the request meant the report couldn't reproduce its own verdict.
+    # What matters here is that the injection added nothing: same runner, same declared path.
+    assert report.acceptance is not None
+    ran = report.acceptance.command
+    assert ran.startswith("pytest ") and ran.endswith(GREEN_GATE.removeprefix("pytest "))
     assert (repo / "tests" / "test_idor.py").exists()
     assert _head(repo) == head and _branch(repo) == branch
     assert _git(repo, "status", "--porcelain") == ""

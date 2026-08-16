@@ -1,15 +1,9 @@
-"""Per-run git worktree — the isolation jail and trust boundary.
-
-Every change happens on a dedicated branch inside a dedicated worktree, never on the
-target's checked-out branch. Paths are confined to the worktree root, commands run
-without a shell, git hooks/fsmonitor from the target repo are disabled, and child
-processes get a scrubbed environment so they can't read our credentials. This is where
-untrusted ticket input is contained, in code.
-"""
+"""Per-run Git worktree isolation and subprocess safety controls."""
 
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 import re
 import shlex
@@ -20,7 +14,7 @@ import subprocess
 import tempfile
 import time
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import IO
 
@@ -35,9 +29,7 @@ from .contracts import RUN_ID_RE
 
 BRANCH_PREFIX = "autodev/"
 
-# Checkpoints live outside refs/heads on purpose: not in `git branch`, not a merge target,
-# not carried by an ordinary `git push`. A retained *branch* of unverified work is a merge
-# accident waiting to happen; a private ref is recoverable state and nothing more.
+# Private refs preserve retry state without creating mergeable branches.
 CHECKPOINT_REF_PREFIX = "refs/autodev/checkpoints/"
 
 # How many runs' checkpoint refs to keep. Retention is effectively unconditional — most runs
@@ -72,10 +64,6 @@ _OUTPUT_TAIL_BYTES = 60 * 1024
 # How long a sweep waits for a process group to drain before escalating to SIGKILL. Short: on a
 # clean run the group is already empty and this is never reached.
 _SWEEP_GRACE_SECONDS = 0.5
-
-# A run id becomes a path component and a ref name, so it is validated before it reaches
-# either. Canonical in contracts because the ledger and cassette paths need the same
-# guarantee — two copies of a safety regex is a drift bug waiting to happen.
 
 # A commit hash read back from a ledger payload is untrusted text before it reaches git: a
 # value starting with `-` would be parsed as a flag.
@@ -163,29 +151,7 @@ class WorktreeError(RuntimeError):
 
 
 def _private_base(base: Path) -> Path:
-    """The worktrees base, guaranteed to be a real directory that only we can write.
-
-    The default lives under the system temp dir, which is per-user and 0700 on macOS but is
-    plain `/tmp` whenever TMPDIR is unset — Linux, CI, most containers. That made
-    `/tmp/autodev-worktrees` a predictable name in a world-writable directory, created with
-    `mkdir(exist_ok=True)` and no checks, so another local user could pre-create it as a symlink
-    and have every worktree land where they chose: a write foothold inside the tree the gate
-    then executes.
-
-    Three deliberate choices:
-
-    - `lstat`, not `stat`: a symlink must fail the "is a directory" test rather than be followed.
-    - no `exist_ok` on the create: if someone wins the race to create it, we refuse instead of
-      adopting their directory.
-    - refuse, never repair. `chmod`-ing a directory someone else made would take ownership of
-      whatever they already put inside it, and `mkdir(mode=…, exist_ok=True)` doesn't even
-      change the mode of an existing directory — so "fixing" it would be a no-op that reads
-      like a fix.
-
-    Checked per run rather than once at startup, because the base can be swapped in between.
-    The residual is the usual lstat-then-use window; what really closes it is the sticky bit on
-    `/tmp`, plus the uid in the default name so the ordinary case is a path nobody else guesses.
-    """
+    """Return the run-owned worktree base; reject symlinks, foreign owners, and loose modes."""
     try:
         info = base.lstat()
     except FileNotFoundError:
@@ -290,6 +256,22 @@ def _kill_group(proc: subprocess.Popen) -> None:
             continue
 
 
+def _set_append_only(fd: int) -> None:
+    """Make every write to this file description go to the end, whatever the writer seeks to.
+
+    The gate's stdout is a file we own, and the child inherits it — so it could `lseek(1, 0)` and
+    overwrite what it had already printed. Verified: real failure output replaced wholesale with
+    "1 passed". The exit code was never forgeable, so the *verdict* held, but the human-readable
+    evidence in the report is what a reviewer actually reads.
+
+    `O_APPEND` has to be set on the file *description*, which is what `dup` (and therefore fd
+    inheritance) shares — reopening the file through `/dev/fd/N` gives a new description whose
+    flags the child's copy doesn't share, which is why that approach silently didn't work.
+    """
+    with contextlib.suppress(OSError):
+        fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) | os.O_APPEND)
+
+
 def _read_excerpt(sink: IO[bytes]) -> str:
     """A bounded excerpt of what the gate printed: the head, then the tail.
 
@@ -361,6 +343,9 @@ def _sweep_group(proc: subprocess.Popen) -> None:
 class CommandResult:
     exit_code: int
     output: str
+    # The argv actually executed, joined for display. Empty for a plain `run()`; set by
+    # `run_acceptance`, whose effective argv is not the string the ticket supplied.
+    command: str = ""
 
     @property
     def ok(self) -> bool:
@@ -539,14 +524,15 @@ class Worktree:
     def run(self, args: list[str], *, timeout: int = 300) -> CommandResult:
         if not args:
             raise WorktreeError("empty command")
-        # Output goes to a temp file, not a pipe: a detached grandchild holding a pipe's
-        # write end open would make the post-timeout read block forever, and the wall-clock
-        # bound is the point. start_new_session gives the child its own process group so a
-        # timeout kills the tree; stdin is closed so nothing can wait on operator input.
-        # Binary, not text mode: the bounded read below needs an end-relative seek, and a text
-        # stream refuses one ("can't do nonzero end-relative seeks"). Popen only wants a
-        # fileno(), so binary costs nothing and we decode the excerpt ourselves.
+        # Use a file instead of a pipe so inherited output handles cannot block cleanup.
         with tempfile.TemporaryFile() as sink:
+            # The child gets an APPEND-only view of the same file, so what it has printed is
+            # not rewritable. Handing it the plain fd let it `seek(0)` and overwrite its own
+            # output — verified: real failures replaced with "1 passed". It could never change
+            # the exit code, so the verdict held, but the human-readable evidence was forgeable
+            # and that is what a reviewer reads. O_APPEND forces every write to the end
+            # regardless of seeking.
+            _set_append_only(sink.fileno())
             try:
                 proc = subprocess.Popen(
                     args,
@@ -574,9 +560,9 @@ class Worktree:
                 _kill_group(proc)
                 raise
             finally:
-                # Before the read, not after. A survivor still holds the inherited write fd, so
-                # it can seek to 0 and rewrite what the gate printed — reading first would
-                # sample evidence that is still being edited.
+                # Before the read, not after: a survivor still holds the inherited write fd, so
+                # reading first would sample output that is still growing. O_APPEND means it can
+                # only ever add to the end, never rewrite what is already there.
                 _sweep_group(proc)
             output = _read_excerpt(sink)
         if timed_out:
@@ -604,7 +590,13 @@ class Worktree:
             )
         except AcceptanceRejected as e:
             raise WorktreeError(f"command not allowed: {command!r} ({e})") from e
-        return self.run(argv, timeout=timeout)
+        result = self.run(argv, timeout=timeout)
+        # The argv we actually ran, so the report records the command that produced the verdict
+        # rather than the one the ticket asked for. They differ on purpose — forced `-o` flags, a
+        # pinned `-c`, `python -m pytest` rewritten — and on a repo with `addopts = --co` the two
+        # give *opposite* answers: the gate correctly reports exit 1 while the ticket's string,
+        # run by hand, exits 0. A reader reproducing a verdict needs the one that was executed.
+        return replace(result, command=shlex.join(argv))
 
     def _gate_config(self) -> Path:
         """The config file the gate runs with — pinned, and pinned to *committed* content.

@@ -1,10 +1,4 @@
-"""run_ticket — the orchestration that ties the plumbing together for one ticket.
-
-The graded safety behaviors live here, in code, not in agent discretion: refusal is a
-deterministic pre-check, the test-gate runs the declared acceptance command and blocks a
-change that doesn't pass (reverting to a clean tree), and the lesson is persisted by code
-for both outcomes even though the Learn agent distills its text.
-"""
+"""Orchestrate one ticket from preflight through acceptance and learning."""
 
 from __future__ import annotations
 
@@ -34,13 +28,10 @@ from .telemetry import setup_telemetry
 from .tools import make_worktree_tools
 from .worktree import Worktree, WorktreeError
 
-# Whole-run wall-clock ceiling. Per-attempt Swarm timeouts bound each step; this bounds
-# the entire multi-node run so a confused ticket can't burn unbounded wall-clock/cost.
+# Whole-run wall-clock limit.
 RUN_DEADLINE_SECONDS = 1800.0
 
-# What a stored rule has to be. Applied here rather than on the LessonDraft contract, where a
-# constraint is a model-reachable loop; see LessonDraft. The cap matters because every stored
-# rule is embedded and searched on every later run, so length is a recall cost, not cosmetics.
+# Keep learned rules concise; schema constraints can trap forced structured output.
 _MIN_RULE_CHARS = 16
 _MAX_RULE_CHARS = 600
 
@@ -56,12 +47,7 @@ def _refusal_reason(
     replaying: bool,
     has_rule: bool = True,
 ) -> str:
-    """Why memory was not allowed to learn from this run. Most specific reason first.
-
-    `has_rule` is checked last on purpose. A degraded or breaker-tripped run has no rule
-    *because* it was cut short, so reporting the missing rule would name the symptom and hide
-    the cause. It is the reason only when nothing else went wrong.
-    """
+    """Return the most specific reason a run could not teach memory."""
     if replaying:
         return "a replayed run re-derives a recorded lesson; it is not a fresh observation"
     if not provenance.allowed:
@@ -123,8 +109,7 @@ def run_ticket(
     run_id = _new_run_id()
     ledger = ledger or Ledger(settings.ledger_db)
     recorder = RunRecorder(ledger, run_id)
-    # A replayed run drives its tools from recorded model output. Recorded output is not
-    # evidence, so such a run is a verification harness: it never ships and never teaches.
+    # Replays verify recorded behavior but cannot ship or teach memory.
     replaying = cassette is not None and cassette.mode == "replay"
     recorder.append(
         BlockType.RUN_START,
@@ -199,7 +184,10 @@ def run_ticket(
                 refusal = str(e)
             else:
                 acceptance = AcceptanceResult(
-                    command=ticket.acceptance_command,
+                    # The effective argv, not the ticket's string: those differ by design and
+                    # can give opposite answers, so recording the request instead of what ran
+                    # meant the report couldn't reproduce its own verdict.
+                    command=r.command or ticket.acceptance_command,
                     exit_code=r.exit_code,
                     output_tail=r.output[-2000:],
                 )
