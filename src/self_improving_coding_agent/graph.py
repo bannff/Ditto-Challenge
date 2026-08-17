@@ -1,14 +1,4 @@
-"""The workflow engine: run a list of NodeConfigs as a Strands Graph of Swarm nodes with a
-self-heal redo loop gated by an eval checkpoint.
-
-Each NodeConfig becomes a custom GraphBuilder node (a MultiAgentBase subclass) that runs
-one swarm attempt plus its eval checkpoint and keeps the Verdict as structured state — so
-edge conditions route retry-vs-advance by reading the verdict directly, never by parsing
-agent text. A self-loop edge re-runs a failed node with the detector's diagnosis injected
-(bounded by max_redos); when retries are spent the node degrades with a fixed message and
-no edge fires — the circuit breaker. set_max_node_executions backstops the whole graph.
-The agent loop still lives inside Swarm/Agent; the graph only sequences, gates, and bounds.
-"""
+"""Run bounded Strands Swarm stages in a graph with evaluator-gated retries."""
 
 from __future__ import annotations
 
@@ -47,8 +37,12 @@ class WorkflowModels:
 
 
 def default_models() -> WorkflowModels:
-    # Built once, up front — never inside a running node (boto client creation isn't
-    # thread-safe and graph nodes run concurrently under the SDK).
+    # Built once, up front — never inside a running node. This graph's nodes run
+    # sequentially (each stage feeds the next), so the reason is not a live race: boto client
+    # creation isn't thread-safe, and a model built inside a node would put that construction
+    # on whatever thread the SDK happens to use. Building here keeps the guarantee independent
+    # of the execution order, which is what makes it safe to parallelise later — see the
+    # per-run exporter note in issues.md #14, which is the thing that would actually block it.
     return WorkflowModels(
         builder=build_model(),
         reviewer=build_reviewer_model(),
@@ -88,16 +82,7 @@ def _avg(verdict: Verdict) -> float | None:
 
 
 def _terminal_agent_result(result):
-    """The last agent turn the swarm actually committed, or None.
-
-    `node_history` is the SDK's ordering record — it appends every committed turn, so its
-    tail is the agent that spoke last. `results` cannot answer this: it is a dict keyed by
-    agent name and overwritten in place, so its insertion order is order of *first*
-    execution. The two agree until an agent is revisited, and then reading `results` returns
-    whoever happened to start last rather than whoever finished ("drafter, refiner, critic,
-    refiner" hands back critic's text). Falling back to `results` keeps a swarm whose
-    history is empty readable.
-    """
+    """Return the terminal agent result, preferring SDK node history over result order."""
     results = getattr(result, "results", {}) or {}
     history = getattr(result, "node_history", None) or []
     names = [getattr(n, "node_id", n) for n in reversed(history)]
@@ -116,12 +101,7 @@ def _terminal_agent_result(result):
 
 
 def _extract_output(result) -> tuple[str, BaseModel | None]:
-    """The terminal turn as text, plus its structured value when the node declared a schema.
-
-    Both come from the same turn on purpose: the text is what the evaluators judge and what
-    the next stage reads, so a structured value taken from anywhere else would be scored
-    against prose it doesn't correspond to.
-    """
+    """Return the final turn's text and structured output."""
     agent_result = _terminal_agent_result(result)
     if agent_result is None:
         return str(result), None
