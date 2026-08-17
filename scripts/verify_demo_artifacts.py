@@ -81,6 +81,15 @@ class StrictAcceptance(_StrictModel):
     passed: bool
 
 
+class StrictSuiteCheck(_StrictModel):
+    command: str
+    exit_code: int
+    output_tail: str = ""
+    baseline_failures: list[str]
+    new_failures: list[str]
+    passed: bool
+
+
 class StrictLesson(_StrictModel):
     schema_version: int
     ticket_id: str
@@ -101,6 +110,8 @@ class StrictRunReport(_StrictModel):
     summary: str = ""
     verdicts: list[StrictVerdict]
     acceptance: StrictAcceptance | None = None
+    # The platform's full-suite regression gate; optional so older bundles still verify.
+    suite: StrictSuiteCheck | None = None
     evidence: str
     lesson: StrictLesson | None = None
     created_at: str
@@ -248,6 +259,8 @@ def _verify_bundle(root_fd: int) -> tuple[StrictManifest, RunReport]:
     if report.outcome is Outcome.SUCCESS:
         if report.branch is None or report.acceptance is None or not report.acceptance.passed:
             raise ValueError("success report lacks a retained branch or passed acceptance")
+        if report.suite is not None and (not report.suite.passed or report.suite.new_failures):
+            raise ValueError("success report carries a failed full-suite regression gate")
         if not _meaningful_patch(contents["diff.patch"]):
             raise ValueError("success report lacks a meaningful source patch")
     if report.outcome is Outcome.REFUSED and (report.branch is not None or not report.evidence):

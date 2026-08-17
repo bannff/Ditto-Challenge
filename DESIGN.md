@@ -111,6 +111,12 @@ run gets `shell=False`, stripped credentials, an isolated `HOME`, no user site p
 killed process group and a timeout, and its output is append-only while captured — a test
 cannot rewrite what it already printed.
 
+A ticket's command may be narrowed to one test file, so it never speaks for the rest of the
+suite: the platform also runs the target's *whole* suite through the same hardened path, at
+the seed (baseline) and after the change, and resolution requires no new failure between the
+two. Red tests owned by other tickets don't block an unrelated fix; a test this change broke
+always does.
+
 The gate is the only thing that can resolve a ticket. Every other outcome reverts and leaves
 the tree clean. An honest failure still teaches; a run cut short does not.
 

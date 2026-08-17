@@ -133,6 +133,27 @@ class AcceptanceResult(BaseModel):
         return self.exit_code == 0
 
 
+class SuiteCheck(BaseModel):
+    """The full-suite regression gate: the target's whole test suite, run by the platform
+    before the workflow (baseline, at the seed commit) and again after the change.
+
+    The fixtures — and any real backlog — legitimately carry tests that are red *before*
+    the change (a bug's repro test, a spec-only feature's acceptance test for some other
+    ticket), so "exit 0" is the wrong bar for the whole suite. The enforceable bar is: the
+    change introduces no NEW failing test. `passed` means exactly that."""
+
+    command: str
+    exit_code: int
+    output_tail: str = ""
+    baseline_failures: list[str] = Field(default_factory=list)
+    new_failures: list[str] = Field(default_factory=list)
+
+    @computed_field
+    @property
+    def passed(self) -> bool:
+        return not self.new_failures
+
+
 class RunReport(BaseModel):
     schema_version: int = SCHEMA_VERSION
     run_id: str
@@ -145,7 +166,12 @@ class RunReport(BaseModel):
     # report without one is still valid.
     summary: str = ""
     verdicts: list[Verdict] = Field(default_factory=list)
+    # The ticket's declared acceptance check. Necessary but not sufficient: it may be
+    # narrowed to one test file, so it proves the ticket's own criterion only.
     acceptance: AcceptanceResult | None = None
+    # The platform's full-suite regression gate. Resolution requires BOTH: the ticket's
+    # check green, and the whole suite carrying no new failure relative to the seed.
+    suite: SuiteCheck | None = None
     evidence: str = ""
     lesson: Lesson | None = None
     created_at: datetime = Field(default_factory=_now)

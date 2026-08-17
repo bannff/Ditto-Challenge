@@ -527,7 +527,8 @@ def test_summary_leads_with_the_gate_and_carries_verify_prose(tmp_path):
     report, _, ledger = _run(ticket, tmp_path, wf)
 
     assert report.outcome == Outcome.SUCCESS
-    assert report.summary.startswith("Resolved: the acceptance gate passed")
+    assert report.summary.startswith("Resolved: the ticket's acceptance check passed")
+    assert "regression gate passed" in report.summary
     assert report.branch is not None and report.branch in report.summary
     assert "Correct and complete." in report.summary  # Verify's prose, not discarded
     saved = ledger.get(report.run_id)
@@ -562,3 +563,101 @@ def test_refusal_summary_is_plain_english(tmp_path):
     assert report.outcome == Outcome.REFUSED
     assert report.summary.startswith("Refused before any work began:")
     assert "No worktree was created." in report.summary
+
+
+
+def test_narrowed_green_gate_cannot_ship_a_change_that_breaks_another_test(tmp_path):
+    """A ticket that narrows its gate to its own green test must not make a run RESOLVED
+    when the change broke a previously-green test elsewhere: the platform's full-suite
+    regression gate decides."""
+    repo = _init_repo(tmp_path / "repo")
+    # Previously green, and broken BY THE CHANGE: it fails once app.py gains more code.
+    (repo / "test_other.py").write_text(
+        "def test_app_stays_tiny():\n"
+        "    assert len(open('app.py').read().splitlines()) <= 1\n"
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "green guard"], check=True)
+    ticket = Ticket(
+        id="T-narrow",
+        repository=str(repo),
+        request="change the app module while a guard test watches its size",
+        acceptance_command="pytest test_app.py",  # green in isolation, before and after
+    )
+    report, memory, _ = _run(ticket, tmp_path, _wf_success())
+
+    assert report.acceptance is not None and report.acceptance.passed  # narrow check green
+    assert report.suite is not None and not report.suite.passed  # regression caught
+    assert "test_other.py::test_app_stays_tiny" in report.suite.new_failures
+    assert report.outcome != Outcome.SUCCESS
+    assert report.branch is None  # nothing shipped
+    memory.store.assert_not_called() if report.outcome == Outcome.INCONCLUSIVE else None
+
+
+def test_preexisting_red_tests_do_not_block_an_unrelated_resolution(tmp_path):
+    """The fixtures ship red tests owned by other tickets (a bug's repro, a spec-only
+    feature's acceptance test). Those must not block THIS ticket: the bar is no NEW
+    failure, not exit 0."""
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "test_someone_elses_bug.py").write_text(
+        "def test_other_ticket_repro():\n    assert False  # red at the seed, by design\n"
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "red owned elsewhere"], check=True)
+    ticket = Ticket(
+        id="T-unrelated",
+        repository=str(repo),
+        request="add a greeting function to the app module",
+        acceptance_command="pytest test_app.py",
+    )
+    report, _, _ = _run(ticket, tmp_path, _wf_success())
+
+    assert report.outcome == Outcome.SUCCESS
+    assert report.suite is not None and report.suite.passed
+    assert report.suite.exit_code != 0  # the suite is NOT green — and that's recorded
+    assert "test_someone_elses_bug.py::test_other_ticket_repro" in (
+        report.suite.baseline_failures
+    )
+    assert report.suite.new_failures == []
+    assert report.branch is not None
+
+
+def test_fully_green_suite_resolves_and_records_both_gates(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    ticket = Ticket(
+        id="T-green",
+        repository=str(repo),
+        request="add a greeting function to the app module",
+        acceptance_command="pytest test_app.py",
+    )
+    report, _, _ = _run(ticket, tmp_path, _wf_success())
+
+    assert report.outcome == Outcome.SUCCESS
+    assert report.acceptance is not None and report.acceptance.passed
+    assert report.suite is not None and report.suite.passed
+    assert report.suite.exit_code == 0
+    assert report.suite.baseline_failures == []
+    assert report.branch is not None
+
+
+def test_selection_flags_cannot_bypass_the_regression_gate(tmp_path):
+    """-k narrowing hides nothing: the platform's own full-suite run still sees the break."""
+    repo = _init_repo(tmp_path / "repo")
+    (repo / "test_other.py").write_text(
+        "def test_app_stays_tiny():\n"
+        "    assert len(open('app.py').read().splitlines()) <= 1\n"
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "green guard"], check=True)
+    ticket = Ticket(
+        id="T-kexpr",
+        repository=str(repo),
+        request="change the app module while hiding the guard behind -k",
+        acceptance_command="pytest -k test_ok",
+    )
+    report, _, _ = _run(ticket, tmp_path, _wf_success())
+
+    assert report.acceptance is not None and report.acceptance.passed
+    assert report.suite is not None and not report.suite.passed
+    assert report.outcome != Outcome.SUCCESS
+    assert report.branch is None

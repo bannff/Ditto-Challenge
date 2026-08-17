@@ -359,3 +359,4 @@ def test_a_collect_only_gate_is_refused_because_it_cannot_fail():
 def test_an_unencodable_path_is_refused_not_a_crash(token: str, jail: Path):
     with pytest.raises(AcceptanceRejected):
         validate(["pytest", token], in_jail=jail)
+

@@ -248,3 +248,26 @@ def _canonical_path(token: str, in_jail: Path | None) -> str:
         raise AcceptanceRejected(f"path escapes the worktree: {token!r}")
     relative = "." if resolved == root else str(resolved.relative_to(root))
     return f"{relative}{sep}{node_id}" if sep else relative
+
+
+# The platform's own full-suite gate. Validated and hardened by the same policy as any
+# ticket command: forced `-o testpaths=` and the pinned committed config mean bare `pytest`
+# collects the target's entire suite and nothing else. `-ra --tb=no -q` keeps the output a
+# parseable short summary, which is where the per-test FAILED/ERROR lines come from.
+FULL_SUITE_COMMAND = "pytest -q -ra --tb=no"
+
+# Short-summary lines that mark a test as not-green. ERRORs count: a test that cannot even
+# run is not a passing test, and treating it as anything else fails open.
+_SUMMARY_FAILURE_PREFIXES = ("FAILED ", "ERROR ")
+
+
+def parse_suite_failures(output: str) -> list[str]:
+    """Extract failed/errored test ids from pytest's short summary, in stable order."""
+    seen: dict[str, None] = {}
+    for line in output.splitlines():
+        stripped = line.strip()
+        for prefix in _SUMMARY_FAILURE_PREFIXES:
+            if stripped.startswith(prefix):
+                # "FAILED tests/x.py::t - assert ..." -> "tests/x.py::t"
+                seen.setdefault(stripped[len(prefix):].split(" - ")[0].strip(), None)
+    return list(seen)

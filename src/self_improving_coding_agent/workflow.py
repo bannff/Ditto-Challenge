@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from .acceptance_policy import FULL_SUITE_COMMAND, parse_suite_failures
 from .cassette import Cassette, model_wrapper
 from .contracts import (
     AcceptanceResult,
@@ -14,6 +15,7 @@ from .contracts import (
     Outcome,
     ProvenanceDecision,
     RunReport,
+    SuiteCheck,
     Ticket,
 )
 from .graph import WorkflowModels, WorkflowResult, default_models, run_workflow
@@ -77,6 +79,7 @@ def _summary(
     acceptance: AcceptanceResult | None,
     branch: str | None,
     unshippable: str | None,
+    suite: SuiteCheck | None = None,
 ) -> str:
     """The reviewer's first read: a deterministic headline, then Verify's own prose.
 
@@ -89,13 +92,27 @@ def _summary(
         gate = "the acceptance gate did not run"
     else:
         gate = (
-            f"the acceptance gate passed (`{acceptance.command}` exited 0)"
+            f"the ticket's acceptance check passed (`{acceptance.command}` exited 0)"
             if acceptance.passed
             else (
-                f"the acceptance gate FAILED "
+                f"the ticket's acceptance check FAILED "
                 f"(`{acceptance.command}` exited {acceptance.exit_code})"
             )
         )
+    if suite is not None:
+        if suite.passed:
+            pre = len(suite.baseline_failures)
+            unchanged = f" ({pre} pre-existing failure(s) owned by other tickets, unchanged)"
+            gate += (
+                "; the full-suite regression gate passed — the change broke no "
+                f"previously-green test{unchanged if pre else ''}"
+            )
+        else:
+            broke = ", ".join(suite.new_failures[:5])
+            gate += (
+                "; the full-suite regression gate FAILED — the change broke "
+                f"previously-green test(s): {broke}"
+            )
     if outcome == Outcome.SUCCESS:
         headline = f"Resolved: {gate}; the change is one commit on branch {branch}."
     elif wf.degraded:
@@ -222,6 +239,19 @@ def run_ticket(
     keep_branch = False
     try:
         recorder.track_git(worktree.seed)
+        # Regression baseline: the whole suite at the seed, before the workflow can touch
+        # the tree. The fixtures (and a real backlog) legitimately carry red tests owned by
+        # other tickets, so the gate's bar is "no NEW failure", and that needs a before.
+        # An unrunnable baseline is a WorktreeError caught by the outer handler paths only
+        # if it happens at gate time; here it must not kill the run silently, so it degrades
+        # to an empty baseline — the strictest reading, every post-run failure counts as new.
+        baseline_failures: list[str] = []
+        if ticket.acceptance_command:
+            try:
+                baseline = worktree.run_acceptance(FULL_SUITE_COMMAND)
+                baseline_failures = parse_suite_failures(baseline.output)
+            except WorktreeError:
+                baseline_failures = []
         primed = memory.retrieve(ticket.request)
         nodes = build_reference_nodes(
             worktree_tools=make_worktree_tools(worktree),
@@ -259,15 +289,11 @@ def run_ticket(
         )
 
         acceptance = None
+        suite = None
         refusal: str | None = None
         if ticket.acceptance_command:
             try:
                 r = worktree.run_acceptance(ticket.acceptance_command)
-            except WorktreeError as e:
-                # An unrunnable gate is a refusal, not a crash: nothing is verified, so
-                # nothing ships, and the run still lands in the ledger with a reason.
-                refusal = str(e)
-            else:
                 acceptance = AcceptanceResult(
                     # The effective argv, not the ticket's string: those differ by design and
                     # can give opposite answers, so recording the request instead of what ran
@@ -276,6 +302,25 @@ def run_ticket(
                     exit_code=r.exit_code,
                     output_tail=r.output[-2000:],
                 )
+                # The regression gate. The ticket's command is untrusted and may be narrowed
+                # to one file, so it never speaks for the rest of the suite: the platform
+                # runs the whole suite itself — same hardened policy path — and compares its
+                # failures against the seed baseline taken before the workflow ran. A change
+                # that breaks any previously-green test is not shippable, no matter how
+                # green the ticket's own check is.
+                post = worktree.run_acceptance(FULL_SUITE_COMMAND)
+                post_failures = parse_suite_failures(post.output)
+                suite = SuiteCheck(
+                    command=post.command or FULL_SUITE_COMMAND,
+                    exit_code=post.exit_code,
+                    output_tail=post.output[-2000:],
+                    baseline_failures=baseline_failures,
+                    new_failures=[f for f in post_failures if f not in set(baseline_failures)],
+                )
+            except WorktreeError as e:
+                # An unrunnable gate is a refusal, not a crash: nothing is verified, so
+                # nothing ships, and the run still lands in the ledger with a reason.
+                refusal = str(e)
             recorder.append(
                 BlockType.ACCEPTANCE_GATE,
                 {
@@ -285,10 +330,28 @@ def run_ticket(
                     "refused": refusal,
                 },
             )
+            recorder.append(
+                BlockType.ACCEPTANCE_GATE,
+                {
+                    "scope": "suite-regression",
+                    "command": FULL_SUITE_COMMAND,
+                    "exit_code": suite.exit_code if suite else None,
+                    "passed": suite.passed if suite else False,
+                    "baseline_failures": len(baseline_failures),
+                    "new_failures": ", ".join(suite.new_failures[:10]) if suite else None,
+                    "refused": refusal,
+                },
+            )
 
-        # A change is only "resolved" if the target's tests actually ran and passed.
+        # A change is only "resolved" if the ticket's own check passed AND the whole suite
+        # carries no failure it didn't already have at the seed.
         # No acceptance command => nothing was verified => never shipped (INCONCLUSIVE).
-        gate_passed = acceptance is not None and acceptance.passed
+        gate_passed = (
+            acceptance is not None
+            and acceptance.passed
+            and suite is not None
+            and suite.passed
+        )
         success = wf.outcome == Outcome.SUCCESS and gate_passed and not wf.degraded
         if success:
             outcome = Outcome.SUCCESS
@@ -382,11 +445,17 @@ def run_ticket(
                 f"Refused: {refusal} Nothing shipped."
                 if refusal
                 else _summary(
-                    outcome, wf, acceptance, worktree.branch if keep_branch else None, unshippable
+                    outcome,
+                    wf,
+                    acceptance,
+                    worktree.branch if keep_branch else None,
+                    unshippable,
+                    suite,
                 )
             ),
             verdicts=wf.verdicts,
             acceptance=acceptance,
+            suite=suite,
             # The whole diff; the ledger bounds its own row. A tree that passed its gate and
             # then couldn't ship is the one case where the diff alone misleads — it shows work
             # that no branch carries — so the reason leads.

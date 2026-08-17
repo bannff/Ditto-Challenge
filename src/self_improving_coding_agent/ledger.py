@@ -128,6 +128,10 @@ def _scrub_report(report: RunReport) -> RunReport:
     data["summary"] = scrub_text(data.get("summary", ""))
     if data.get("acceptance"):
         data["acceptance"]["output_tail"] = scrub_text(data["acceptance"].get("output_tail", ""))
+    if data.get("suite"):
+        data["suite"]["output_tail"] = scrub_text(data["suite"].get("output_tail", ""))
+        for key in ("baseline_failures", "new_failures"):
+            data["suite"][key] = [scrub_text(item) for item in data["suite"].get(key, [])]
     if data.get("lesson"):
         data["lesson"]["content"] = scrub_text(data["lesson"]["content"])
     for verdict in data.get("verdicts", []):

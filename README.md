@@ -94,7 +94,11 @@ uv run autodev run --ticket examples/tickets/bug-1-failing-test.json --repo <tar
 
 A ticket is JSON with `id`, `repository`, `request`, `domain`, and `acceptance_command`.
 `--repo` overrides `repository`, so seed tickets remain portable. A resolved run commits
-only to its isolated branch after the platform-run acceptance gate passes. A failed,
+only to its isolated branch after two platform-run gates pass: the ticket's own acceptance
+check, and a full-suite regression gate — the platform runs the target's *entire* test
+suite before and after the change, and blocks any change that breaks a previously-green
+test, no matter how narrow the ticket's declared command was. Pre-existing failures owned
+by other tickets don't block an unrelated resolution; new ones always do. A failed,
 degraded, or refused run does not ship a partial change.
 
 `examples/tickets/` holds nine tickets against two target apps: three bugs, three features, one
