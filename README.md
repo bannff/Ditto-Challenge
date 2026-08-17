@@ -55,7 +55,10 @@ A ticket is JSON with `id`, `repository`, `request`, `domain`, and `acceptance_c
 only to its isolated branch after the platform-run acceptance gate passes. A failed,
 degraded, or refused run does not ship a partial change.
 
-The included target apps and tickets provide the required bug, feature, and refusal cases:
+`examples/tickets/` holds nine tickets against two target apps: three bugs, three features, one
+broken-access-control case, and two that must be refused. That is more than the brief asks for,
+because the interesting cases are the ones that look like each other — a bug report whose wording
+reads like an attack, and an attack phrased as an ordinary refactor.
 
 ```bash
 uv run python scripts/demo.py --out demos/generated
