@@ -19,7 +19,7 @@ import subprocess
 from collections.abc import AsyncGenerator, AsyncIterable
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -134,7 +134,12 @@ def test_a_run_with_no_usable_rule_does_not_claim_to_have_learned(tmp_path, rule
     with patch.object(workflow, "run_workflow", return_value=wf), patch.object(
         workflow, "setup_telemetry"
     ):
-        report = workflow.run_ticket(ticket, memory=memory, ledger=ledger)
+        # run_workflow is mocked, so no model call happens — but default_models() still
+        # builds real boto3 sessions if models= is omitted, and a runner with no AWS
+        # profile named "default" fails there before the mock is ever reached.
+        report = workflow.run_ticket(
+            ticket, models=cast(Any, object()), memory=memory, ledger=ledger
+        )
 
     memory.store.assert_not_called()
     assert report.lesson is None
