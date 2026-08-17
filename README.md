@@ -13,7 +13,7 @@ The workflow is a tour of best practices, and I'll name them as we go:
   intelligence *inside* each node: a shared, automatically managed context window, handoffs,
   consensus. It scales to zero — a one-line fix is often one agent and one turn, because the
   model decides when it's done, not a loop counter. Swarms have inbuilt bounds on their collab (handoff/toolcall/etc).
-- **Ensemble Technique, not echo chamber.** Three *different model families* per swarm, two cheap and
+- **Ensemble Technique** Three *different model families* per swarm, two cheap and
   one strong (frugality). A reviewer that shares the builder's blind spots just
   agrees with it; the third voice is explicitly adversarial — its job is to break the change (Adversarial Self Prompting).
 - **Evals as infrastructure** [strands-evals]. An eval harness on every node, judged against
