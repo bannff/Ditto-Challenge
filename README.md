@@ -55,6 +55,27 @@ its trace log, report, diff, and hash chain, verifiable offline with
 `scripts/verify_demo_artifacts.py` (no credentials needed). Regenerate any of them live
 with the commands below.
 
+## What I wish I had more time for
+
+Honesty is a feature. Each of these is bounded by something already in place — none is a
+silent hole:
+
+- **A real spend ceiling.** Runs are bounded by handoffs, iterations, and wall clock, but
+  there's no cumulative token/dollar cap. The seam already exists (every model call goes
+  through one wrapper); production gets a per-run and per-tenant budget there.
+- **OS-level sandboxing.** The worktree jail + credential stripping + isolated HOME hold
+  the agent; they don't contain hostile *target code* at the kernel level. Production runs
+  the gate inside a no-egress microVM. I know the two escapes this class allows — they're
+  documented in DESIGN.md, not discovered by you.
+- **Signed evidence.** The ledger is tamper-evident, not tamper-proof: whoever can rewrite
+  a whole exported bundle can rewrite its recorded head. One KMS signature on the chain
+  head closes it.
+- **Known holes, kept loud.** A handful of adversarial tests are `xfail(strict=true)` —
+  each encodes a hole I found but haven't closed, and the suite *fails* the moment a fix
+  lands, so the marker can never go stale. Finding your own escapes is the job.
+- **Memory hygiene at scale.** Lessons are scrubbed, deduplicated, and provenance-gated,
+  but not repo-scoped or expiry-managed — fine for one repo, needs tenancy for a fleet.
+
 ## Two commands
 
 ```bash
