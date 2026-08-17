@@ -45,6 +45,10 @@ def build_agent(
         plugins=plugins,
         hooks=list(hooks or []),
         structured_output_model=output_model,
+        # "auto" = SummarizingConversationManager with proactive compression plus
+        # large-tool-result offloading. Long tool-heavy sessions compress themselves
+        # instead of hitting the context ceiling mid-node.
+        context_manager="auto",
     )
 
 

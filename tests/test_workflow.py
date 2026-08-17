@@ -3,6 +3,8 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from self_improving_coding_agent import workflow
 from self_improving_coding_agent.cassette import Cassette
 from self_improving_coding_agent.contracts import (
@@ -442,3 +444,68 @@ def test_checkpoint_refs_are_pruned_as_runs_accumulate(tmp_path):
         check=True,
     ).stdout.split()
     assert len(refs) == 1
+
+
+def test_unexpected_workflow_failure_writes_one_final_partial_deep_dive_event(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    ticket = Ticket(
+        id="T-deep-dive-failure",
+        repository=str(repo),
+        request="Add a greeting function to the app module.",
+        acceptance_command="pytest test_app.py",
+    )
+    events: list[dict[str, object]] = []
+
+    with (
+        patch.object(workflow, "run_workflow", side_effect=RuntimeError("unexpected")),
+        patch.object(workflow, "setup_telemetry"),
+    ):
+        try:
+            workflow.run_ticket(
+                ticket,
+                models=cast(Any, object()),
+                kb=cast(Any, MagicMock()),
+                memory=cast(Any, MagicMock()),
+                ledger=Ledger(tmp_path / "ledger.db"),
+                deep_dive_cb=events.append,
+            )
+        except RuntimeError as error:
+            assert str(error) == "unexpected"
+        else:
+            raise AssertionError("unexpected workflow failure must propagate")
+
+    terminal_events = [event for event in events if event["kind"] == "terminal"]
+    assert len(terminal_events) == 1
+    assert terminal_events[0]["status"] == "partial"
+    assert terminal_events[0]["outcome"] == "incomplete"
+    assert events[-1] == terminal_events[0]
+
+
+def test_failed_lesson_priming_still_finalizes_deep_dive_event(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    ticket = Ticket(
+        id="T-priming-failure",
+        repository=str(repo),
+        request="Add a greeting function to the app module.",
+        acceptance_command="pytest test_app.py",
+    )
+    memory = MagicMock()
+    memory.retrieve.side_effect = RuntimeError("memory unavailable")
+    events: list[dict[str, object]] = []
+
+    with (
+        patch.object(workflow, "setup_telemetry"),
+        pytest.raises(RuntimeError, match="memory unavailable"),
+    ):
+        workflow.run_ticket(
+            ticket,
+            models=cast(Any, object()),
+            kb=cast(Any, MagicMock()),
+            memory=cast(Any, memory),
+            ledger=Ledger(tmp_path / "ledger.db"),
+            deep_dive_cb=events.append,
+        )
+
+    assert events[-1]["kind"] == "terminal"
+    assert events[-1]["status"] == "partial"
+    assert events[-1]["outcome"] == "incomplete"

@@ -118,7 +118,9 @@ def _build_evaluators(node: NodeConfig, model: Model) -> list[BuiltEvaluator]:
             # The concrete evaluators accept a trace_extractor on the base class only and
             # don't forward it from their own __init__, so scope it here.
             evaluator._trace_extractor = spec.trace_extractor
-        built.append(BuiltEvaluator(spec.name, evaluator, spec.threshold, spec.gating))
+        built.append(
+            BuiltEvaluator(spec.name, evaluator, spec.threshold, spec.gating, spec.assertion)
+        )
     return built
 
 

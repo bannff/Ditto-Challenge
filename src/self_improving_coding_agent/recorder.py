@@ -17,7 +17,7 @@ swallowed, because an omitted block leaves a chain that still verifies.
 
 from __future__ import annotations
 
-import hashlib
+from contextlib import suppress
 from typing import Any
 
 from strands.hooks import AfterToolCallEvent, HookProvider, HookRegistry
@@ -35,44 +35,39 @@ _STATE_BLOCKS = {
     NodeState.FAILED: BlockType.BREAKER_TRIP,
 }
 
-# How each tool's arguments are recorded. "verbatim" keeps the value; "digest" keeps only
-# its size and a short hash. File *content* is digested on purpose: it is arbitrary target
-# repo text, and a durable audit row that `replay` prints is the wrong place for it — a
-# repo secret that no scrub pattern happens to match would land there. Size plus digest
-# still answers the audit questions (which file, how big, did it change between attempts).
-# An unlisted tool records its argument names only.
-_RECORDED_ARGS: dict[str, dict[str, str]] = {
-    "read_file": {"path": "verbatim"},
-    "list_files": {"path": "verbatim"},
-    "write_file": {"path": "verbatim", "content": "digest"},
-    "recall_lessons": {"query": "verbatim"},
-    "query_policy": {"query": "verbatim"},
+# Tool hooks carry model-controlled input and arbitrary tool output. The durable ledger and
+# deep-dive callback receive only this fixed metadata; content, argument names, IDs, status,
+# cancellation text, and exception text are intentionally excluded.
+_TOOL_CATEGORIES = {
+    "read_file": "read_file",
+    "list_files": "list_files",
+    "write_file": "write_file",
+    "recall_lessons": "recall_lessons",
+    "query_policy": "query_policy",
 }
+_KNOWN_NODES = frozenset({"discover", "implement", "verify", "learn"})
 
 
-def _digest(value: Any) -> str:
-    text = value if isinstance(value, str) else str(value)
-    return f"{len(text)} chars, sha256:{hashlib.sha256(text.encode()).hexdigest()[:12]}"
+def _tool_category(value: Any) -> str:
+    return _TOOL_CATEGORIES.get(value, "unknown") if isinstance(value, str) else "unknown"
 
 
-def _record_args(tool_name: str | None, args: Any) -> dict[str, Any]:
-    if not isinstance(args, dict):
-        return {}
-    policy = _RECORDED_ARGS.get(tool_name or "")
-    if policy is None:
-        return {"arg_names": sorted(str(k) for k in args)}
+def _node_category(value: str) -> str:
+    return value if value in _KNOWN_NODES else "unknown"
+
+
+def _tool_event(node: str, event: AfterToolCallEvent) -> dict[str, Any]:
+    tool_use = event.tool_use if isinstance(event.tool_use, dict) else {}
+    cancelled = event.cancel_message is not None
+    failed = event.exception is not None
+    completed = not cancelled and not failed
     return {
-        key: (_digest(value) if policy.get(key) == "digest" else value)
-        for key, value in args.items()
-        if key in policy
+        "node": _node_category(node),
+        "tool": _tool_category(tool_use.get("name")),
+        "completed": completed,
+        "cancelled": cancelled,
+        "error_category": "cancelled" if cancelled else "tool_error" if failed else "none",
     }
-
-
-def _tool_status(result: Any) -> str | None:
-    if isinstance(result, dict):
-        status = result.get("status")
-        return str(status) if status is not None else None
-    return None
 
 
 class NodeToolRecorder(HookProvider):
@@ -91,18 +86,15 @@ class NodeToolRecorder(HookProvider):
         registry.add_callback(AfterToolCallEvent, self._on_tool_call)
 
     def _on_tool_call(self, event: AfterToolCallEvent) -> None:
-        tool_use = event.tool_use or {}
-        self._recorder.append(
-            BlockType.TOOL_CALL,
+        payload = _tool_event(self._node, event)
+        self._recorder.append(BlockType.TOOL_CALL, payload)
+        self._recorder._emit(
             {
-                "node": self._node,
-                "tool": tool_use.get("name"),
-                "tool_use_id": tool_use.get("toolUseId"),
-                "args": _record_args(tool_use.get("name"), tool_use.get("input")),
-                "status": _tool_status(event.result),
-                "cancelled": event.cancel_message,
-                "error": str(event.exception) if event.exception is not None else None,
-            },
+                "kind": "tool",
+                "status": "completed" if payload["completed"] else payload["error_category"],
+                "node": payload["node"],
+                "category": payload["tool"],
+            }
         )
 
 
@@ -110,9 +102,12 @@ class RunRecorder:
     """Writes one run's chain. Use `for_node(name)` to get the per-node tool hook, and
     wrap the workflow's status callback with `status_callback()` for node lifecycle."""
 
-    def __init__(self, ledger: Ledger, run_id: str) -> None:
+    def __init__(
+        self, ledger: Ledger, run_id: str, event_callback=None
+    ) -> None:
         self._ledger = ledger
         self._run_id = run_id
+        self._event_callback = event_callback
         self._git_hash: str | None = None
         self.drops = 0
 
@@ -170,6 +165,25 @@ class RunRecorder:
                 "eval_score": event.get("eval_score"),
             },
         )
+        node = event.get("node")
+        safe_node = _node_category(node) if isinstance(node, str) else "unknown"
+        self._emit(
+            {
+                "kind": "node",
+                "status": str(state),
+                "node": safe_node,
+                "score": event.get("eval_score"),
+            }
+        )
+
+    def observe(self, event: dict[str, Any]) -> None:
+        self._emit(event)
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        if self._event_callback is None:
+            return
+        with suppress(Exception):  # observability must never affect the run
+            self._event_callback({"run_id": self._run_id, **event})
 
     def status_callback(self, downstream=None):
         """Wrap a caller's status callback so recording is transparent to it."""

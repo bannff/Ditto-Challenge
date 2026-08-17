@@ -6,14 +6,17 @@ run whose record doesn't verify cannot teach memory anything.
 
 import json
 import sqlite3
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+from strands.hooks import AfterToolCallEvent
 
 from self_improving_coding_agent.contracts import GENESIS_HASH, BlockType, NodeState
 from self_improving_coding_agent.ledger import Ledger
-from self_improving_coding_agent.recorder import RunRecorder
+from self_improving_coding_agent.recorder import RunRecorder, _tool_event
 
 RUN = "run-abc123"
 
@@ -455,33 +458,43 @@ def test_defanging_happens_after_scrubbing_so_multiline_secrets_still_match(tmp_
     assert "REDACTED_PRIVATE_KEY" in stored
 
 
-def test_file_content_is_digested_rather_than_stored(tmp_path):
-    # write_file's content argument is arbitrary target-repo text. A durable audit row that
-    # replay prints is the wrong home for it — a repo secret matching no scrub shape would
-    # land there. Size and digest keep the audit value without the sink.
-    from self_improving_coding_agent.recorder import _record_args
+def _tool_payload(tool: str, args: dict[str, str]) -> dict:
+    event = cast(
+        AfterToolCallEvent,
+        SimpleNamespace(
+            tool_use={"name": tool, "toolUseId": "unrecorded-id", "input": args},
+            result={"status": "unrecorded-status"},
+            cancel_message=None,
+            exception=None,
+        ),
+    )
+    return _tool_event("implement", event)
 
+
+def test_file_content_is_not_retained_in_tool_metadata():
     secret_body = "internal_api_key_with_no_recognisable_shape_9182736450"
-    args = _record_args("write_file", {"path": "app.py", "content": secret_body})
 
-    assert args["path"] == "app.py"
-    assert secret_body not in args["content"]
-    assert "sha256:" in args["content"]
-    assert str(len(secret_body)) in args["content"]
+    payload = _tool_payload("write_file", {"path": "app.py", "content": secret_body})
 
-
-def test_an_unknown_tool_records_only_its_argument_names(tmp_path):
-    from self_improving_coding_agent.recorder import _record_args
-
-    args = _record_args("some_new_tool", {"payload": "sensitive", "target": "/etc/passwd"})
-    assert args == {"arg_names": ["payload", "target"]}
+    assert payload == {
+        "node": "implement",
+        "tool": "write_file",
+        "completed": True,
+        "cancelled": False,
+        "error_category": "none",
+    }
+    assert secret_body not in json.dumps(payload)
 
 
-def test_a_digest_changes_when_the_content_changes(tmp_path):
-    # The audit question the digest has to answer: did the agent write something different
-    # on its second attempt?
-    from self_improving_coding_agent.recorder import _record_args
+def test_an_unknown_tool_is_recorded_as_a_category_without_arguments():
+    payload = _tool_payload("some_new_tool", {"payload": "sensitive", "target": "/etc/passwd"})
 
-    first = _record_args("write_file", {"path": "a.py", "content": "x = 1"})
-    second = _record_args("write_file", {"path": "a.py", "content": "x = 2"})
-    assert first["content"] != second["content"]
+    assert payload["tool"] == "unknown"
+    assert "args" not in payload
+
+
+def test_tool_metadata_is_unchanged_when_content_changes():
+    first = _tool_payload("write_file", {"path": "a.py", "content": "x = 1"})
+    second = _tool_payload("write_file", {"path": "a.py", "content": "x = 2"})
+
+    assert first == second

@@ -21,11 +21,12 @@ def test_reference_nodes_shape():
     )
     names = [n.name for n in nodes]
     assert names == ["discover", "implement", "verify", "learn"]
-    # every node is a 3-agent trio spanning the three model families, and every node has
-    # at least two gating evaluators deciding pass/fail
-    for n in nodes:
-        assert {a.role for a in n.agents} == {"builder", "reviewer", "third"}
-        assert len([e for e in n.evaluators if e.gating]) >= 2
+    # Implement advances on GoalSuccess alone; other nodes retain their own gates.
+    for node in nodes:
+        assert {agent.role for agent in node.agents} == {"builder", "reviewer", "third"}
+        expected_gates = 1 if node.name == "implement" else 2
+        gating_evaluators = [evaluator for evaluator in node.evaluators if evaluator.gating]
+        assert len(gating_evaluators) >= expected_gates
     # only implement carries the tool-call steering interceptor
     implement = nodes[1]
     assert implement.steering_prompt is not None
@@ -42,10 +43,10 @@ def test_per_tool_call_judges_are_informational_and_scoped():
     assert tool_specs, "expected per-tool-call judges to still run"
     for spec in tool_specs:
         assert spec.gating is False
-    # goal_success is the gate on implement
+    # GoalSuccess is the sole implement gate; all quality and trajectory judges inform it.
     implement = next(n for n in nodes if n.name == "implement")
     gates = {e.name for e in implement.evaluators if e.gating}
-    assert "goal_success" in gates
+    assert gates == {"goal_success"}
 
 
 def test_primed_lessons_injected_into_discover():

@@ -122,9 +122,13 @@ def test_a_real_agents_tool_call_lands_in_the_chain(tmp_path):
     tool_blocks = [b for b in ledger.blocks("run-hook") if b.block_type == BlockType.TOOL_CALL]
     assert len(tool_blocks) == 1
     payload = tool_blocks[0].payload
-    assert payload["tool"] == "write_file"
-    assert payload["args"]["path"] == "inventory.py"
-    assert payload["status"] == "success"
+    assert payload == {
+        "node": "implement",
+        "tool": "write_file",
+        "completed": True,
+        "cancelled": False,
+        "error_category": "none",
+    }
     assert ledger.verify_chain("run-hook").valid
 
 
@@ -143,7 +147,8 @@ def test_file_content_never_reaches_the_chain_from_a_live_tool_call(tmp_path):
 
     stored = json.dumps([b.payload for b in ledger.blocks("run-hook")])
     assert "SECRET_BODY_abc123" not in stored
-    assert "sha256:" in stored
+    assert "sha256:" not in stored
+    assert '"completed": true' in stored
 
 
 def test_the_recorder_is_registered_on_every_agent_in_a_node(tmp_path):

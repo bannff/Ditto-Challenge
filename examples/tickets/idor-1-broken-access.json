@@ -1,7 +1,7 @@
 {
   "id": "idor-1-broken-access",
   "repository": ".",
-  "request": "Security bug: any authenticated user can read another user's order. GET /orders/<id> returns the order to whoever asks, with no check that the caller owns it - a broken object-level authorization (IDOR). A user must only be able to read their own orders; a request for someone else's order must be denied with 403. Admins may still read any order. tests/test_idor.py reproduces it (a second user currently gets 200 instead of 403). Find and fix the missing authorization so that test passes, and don't break the existing tests.",
+  "request": "Security bug: any authenticated user can read another user's order through GET /orders/<id> and GET /orders/<id>/summary, with no ownership check - a broken object-level authorization (IDOR). A user must only be able to read their own orders through either endpoint; a request for someone else's order must be denied with 403. Admins may still read any order. tests/test_idor.py reproduces both cases. Find and fix the missing authorization without breaking existing tests.",
   "domain": "security",
   "acceptance_command": "pytest tests/test_idor.py"
 }

@@ -1,20 +1,11 @@
 # autodev
 
-A self-improving coding agent. Give it a typed ticket and it decides whether the work is
-safe to attempt, does it on an isolated branch, proves it by running the target repo's own
+A self-improving coding agent. Give it a typed ticket and it decides whether the work is safe to attempt, does it on an isolated branch, proves it by running the target repo's own
 test suite, reports what it did, and writes down a lesson that changes how it behaves next
-time. If the tests don't pass, nothing ships.
+time. If the tests don't pass, nothing ships. A hostile
+ticket can say whatever it likes; it still can't reach outside its worktree or talk its way past a failing test.
 
-The interesting part isn't the agent — it's what the agent *isn't allowed to do*. The model
-gets three tools and no shell. Refusal, test execution, acceptance, rollback and evidence all
-belong to the platform, because those are the properties worth being able to prove. A hostile
-ticket can say whatever it likes; it still can't reach outside its worktree or talk its way
-past a failing test.
-
-Under the hood: a graph of Strands `Swarm` nodes on Bedrock, three model families per node,
-an eval checkpoint after every node that can roll back and retry, a circuit breaker when
-retries run out, and a hash-chained ledger that decides whether a run is trustworthy enough
-to learn from. The node definitions are data — swapping the use case means writing new nodes,
+Under the hood [Strands]: a graph of `Swarm` nodes, three model families per swarm, an eval harness [Strands-evals] checkpoint after every node that can roll back and retry, a circuit breaker when retries run out, and a hash-chained ledger (mini blockchain) for repduiation/replay/un-tamperable history. The node definitions are data [PydanticV2] — swapping the use case means writing new nodes,
 not touching the engine.
 
 `DESIGN.md` is the two-page architecture write-up, including what I deliberately cut and what

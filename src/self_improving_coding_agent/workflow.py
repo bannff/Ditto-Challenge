@@ -103,13 +103,17 @@ def run_ticket(
     ledger: Ledger | None = None,
     telemetry_console: bool = True,
     cassette: Cassette | None = None,
+    deep_dive_cb=None,
 ) -> RunReport:
     settings = get_settings()
     settings.ensure_dirs()
     run_id = _new_run_id()
     ledger = ledger or Ledger(settings.ledger_db)
-    recorder = RunRecorder(ledger, run_id)
-    # Replays verify recorded behavior but cannot ship or teach memory.
+    recorder = RunRecorder(ledger, run_id, event_callback=deep_dive_cb)
+    deep_dive_finalized = False
+    recorder.observe({"kind": "run", "status": "started"})
+    # A replayed run drives its tools from recorded model output. Recorded output is not
+    # evidence, so such a run is a verification harness: it never ships and never teaches.
     replaying = cassette is not None and cassette.mode == "replay"
     recorder.append(
         BlockType.RUN_START,
@@ -122,7 +126,18 @@ def run_ticket(
         # to be as auditable as a resolved one.
         recorder.append(BlockType.RUN_END, {"outcome": str(Outcome.REFUSED), "reason": reason})
         report = RunReport(run_id=run_id, ticket=ticket, outcome=Outcome.REFUSED, evidence=reason)
-        ledger.save(report)
+        ledger.save(report)  # the stored copy is scrubbed and bounded; the caller keeps the full report
+        deep_dive_finalized = True
+        head = ledger.head(run_id)
+        recorder.observe(
+            {
+                "kind": "terminal",
+                "status": "complete",
+                "outcome": str(report.outcome),
+                "chain_length": head[0] if head else None,
+                "chain_head": head[1] if head else None,
+            }
+        )
         return report
 
     setup_telemetry(console=telemetry_console)
@@ -317,11 +332,43 @@ def run_ticket(
             # this run taught nothing, which is the honest reading.
             lesson=lesson if may_learn else None,
         )
+        for verdict in report.verdicts:
+            for score in verdict.scores:
+                recorder.observe(
+                    {
+                        "kind": (
+                            "detector"
+                            if score.evaluator == "trajectory_diagnostic"
+                            else "evaluator"
+                        ),
+                        "status": "passed" if score.passed else "failed",
+                        "node": verdict.node,
+                        "attempt": verdict.attempts,
+                        "category": score.evaluator,
+                        "score": score.score,
+                        "threshold": score.threshold,
+                    }
+                )
         recorder.append(
             BlockType.RUN_END,
             {"outcome": str(outcome), "branch": report.branch, "learned": may_learn},
         )
-        ledger.save(report)
+        ledger.save(report)  # the stored copy is scrubbed and bounded; the caller keeps the full report
+        deep_dive_finalized = True
+        head = ledger.head(run_id)
+        recorder.observe(
+            {
+                "kind": "terminal",
+                "status": "complete",
+                "outcome": str(report.outcome),
+                "chain_length": head[0] if head else None,
+                "chain_head": head[1] if head else None,
+            }
+        )
         return report
     finally:
+        if not deep_dive_finalized:
+            recorder.observe(
+                {"kind": "terminal", "status": "partial", "outcome": "incomplete"}
+            )
         worktree.remove(keep_branch=keep_branch)

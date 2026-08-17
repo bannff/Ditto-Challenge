@@ -1,11 +1,26 @@
 import asyncio
 from unittest.mock import patch
 
+from strands_evals.evaluators import Evaluator
+from strands_evals.types import EvaluationOutput
+
 from self_improving_coding_agent import graph
 from self_improving_coding_agent.contracts import Outcome, Verdict
 from self_improving_coding_agent.fallback import build_fallback_model
 from self_improving_coding_agent.graph import WorkflowModels, run_workflow
-from self_improving_coding_agent.node import AgentSpec, NodeConfig
+from self_improving_coding_agent.node import AgentSpec, EvaluatorSpec, NodeConfig
+
+
+class _PassGate(Evaluator):
+    """Offline stand-in for a gating judge: the checkpoint fails closed when a node has
+    no gating evaluator, so fixtures that exercise the engine (not the judges) carry one
+    that always passes without a model call."""
+
+    def __init__(self, model=None):
+        super().__init__()
+
+    def evaluate(self, evaluation_case):
+        return [EvaluationOutput(score=1.0, test_pass=True, reason="offline stub gate")]
 
 
 def _models() -> WorkflowModels:
@@ -20,10 +35,11 @@ def _node(name="discover", max_redos=1):
         name=name,
         agents=[AgentSpec(name=f"{name}-a", system_prompt="do")],
         max_redos=max_redos,
+        evaluators=[EvaluatorSpec(name="stub_gate", evaluator_cls=_PassGate, threshold=1.0)],
     )
 
 
-def test_happy_path_no_evaluators_runs_offline():
+def test_happy_path_runs_offline_with_stub_gate():
     result = run_workflow([_node("discover"), _node("verify")], "resolve ticket", models=_models())
     assert result.outcome == Outcome.SUCCESS
     assert set(result.outputs) == {"discover", "verify"}

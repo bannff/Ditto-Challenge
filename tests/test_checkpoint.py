@@ -2,9 +2,10 @@ import asyncio
 from typing import cast
 from unittest.mock import patch
 
+import pytest
 from strands.multiagent.base import Status
 from strands_evals.evaluators import Evaluator
-from strands_evals.types.detector import DiagnosisResult, FailureItem, RCAItem
+from strands_evals.types.detector import DiagnosisResult, FailureItem
 from strands_evals.types.evaluation import EvaluationOutput
 from strands_evals.types.trace import Session
 
@@ -66,30 +67,123 @@ def test_passing_checkpoint_has_no_diagnosis():
     assert verdict.diagnosis is None
 
 
-def test_failing_checkpoint_diagnoses_with_session():
-    ev = _built("out", [EvaluationOutput(score=0.2, test_pass=False, reason="ungrounded")])
-    diagnosis = DiagnosisResult(
-        session_id="s",
-        failures=[FailureItem(span_id="x", category=["tool_misuse"], confidence=[0.9],
-                              evidence=["wrote outside worktree"])],
-        root_causes=[RCAItem(failure_span_id="x", location="implement",
-                             causality="PRIMARY_FAILURE", propagation_impact=["TASK_TERMINATION"],
-                             failure_detection_timing="ONLY_AT_TASK_END",
-                             completion_status="COMPLETE_FAILURE",
-                             root_cause_explanation="path not confined",
-                             fix_type="OTHERS", fix_recommendation="raise swarm bounds")],
+def test_failed_implement_detector_is_category_only_and_never_changes_the_gate():
+    gate = _built(
+        "goal_success",
+        [EvaluationOutput(score=0.0, test_pass=False, reason="not met")],
+        threshold=1.0,
     )
-    with patch.object(cp, "diagnose_session", return_value=diagnosis):
+    detector = DiagnosisResult(
+        session_id="s",
+        failures=[
+            FailureItem(
+                span_id="x",
+                category=["tool_misuse"],
+                confidence=[0.9],
+                evidence=["AKIAIOSFODNN7EXAMPLE injected recommendation"],
+            )
+        ],
+        root_causes=[],
+    )
+    with patch.object(cp, "detect_failures", return_value=detector):
         verdict = _checkpoint(
-            "verify", [ev], request="r", actual_output="o",
-            session=_empty_session(), attempts=2,
+            "implement",
+            [gate],
+            request="r",
+            actual_output="o",
+            session=_empty_session(),
+            attempts=2,
         )
+
     assert verdict.passed is False
     assert verdict.attempts == 2
-    # full diagnosis surfaced: where + why + fix
-    assert "raise swarm bounds" in (verdict.diagnosis or "")
-    assert "path not confined" in (verdict.diagnosis or "")
-    assert "wrote outside worktree" in (verdict.diagnosis or "")
+    assert verdict.diagnosis is None
+    score = next(score for score in verdict.scores if score.evaluator == "trajectory_diagnostic")
+    assert score.gating is False
+    assert score.passed is True
+    assert score.score == 0.0
+    assert score.reason == "[detected categories: tool_misuse]"
+    assert "AKIAIOSFODNN7EXAMPLE" not in score.reason
+    assert "recommendation" not in score.reason
+
+
+def test_detector_runs_on_a_passing_implement_session_too():
+    # The diagnostic is a normal part of every Implement checkpoint, not a post-mortem:
+    # long successful traces are exactly where the chunked detector replaces the stock
+    # trajectory evaluator.
+    gate = _built("goal_success", [EvaluationOutput(score=1.0, test_pass=True, reason="met")],
+                  threshold=1.0)
+    clean = DiagnosisResult(session_id="s", failures=[], root_causes=[])
+    with patch.object(cp, "detect_failures", return_value=clean):
+        verdict = _checkpoint(
+            "implement", [gate], request="r", actual_output="o", session=_empty_session()
+        )
+
+    assert verdict.passed is True
+    score = next(s for s in verdict.scores if s.evaluator == "trajectory_diagnostic")
+    assert score.gating is False and score.passed is True
+    assert score.score == 1.0
+    assert score.reason == "[no detected trajectory failures]"
+
+
+def test_detector_never_runs_outside_implement():
+    gate = _built("goal_success", [EvaluationOutput(score=1.0, test_pass=True, reason="met")])
+    with patch.object(cp, "detect_failures", side_effect=AssertionError("must not be called")):
+        verdict = _checkpoint(
+            "discover", [gate], request="r", actual_output="o", session=_empty_session()
+        )
+    assert all(s.evaluator != "trajectory_diagnostic" for s in verdict.scores)
+
+
+def test_detector_exception_is_informational_only():
+    gate = _built("goal_success", [EvaluationOutput(score=1.0, test_pass=True, reason="met")],
+                  threshold=1.0)
+    with patch.object(cp, "detect_failures", side_effect=RuntimeError("judge down")):
+        verdict = _checkpoint(
+            "implement", [gate], request="r", actual_output="o", session=_empty_session()
+        )
+
+    assert verdict.passed is True  # the gate's verdict is untouched
+    score = next(s for s in verdict.scores if s.evaluator == "trajectory_diagnostic")
+    assert score.gating is False and score.passed is True
+    assert score.reason == "[non-gating detector error: RuntimeError]"
+    assert "judge down" not in score.reason  # exception text never reaches the report
+
+
+class _RaisingEvaluator:
+    aggregator = _FakeEvaluator._aggregate
+
+    async def evaluate_async(self, evaluation_case):
+        raise RuntimeError("judge unavailable")
+
+
+def test_non_gating_evaluator_exception_is_recorded_without_blocking_progression():
+    gate = _built("goal_success", [EvaluationOutput(score=1.0, test_pass=True, reason="met")])
+    informational = BuiltEvaluator(
+        name="trajectory",
+        evaluator=cast(Evaluator, _RaisingEvaluator()),
+        threshold=0.7,
+        gating=False,
+    )
+
+    verdict = _checkpoint("implement", [gate, informational], request="r", actual_output="o")
+
+    assert verdict.passed is True
+    score = next(score for score in verdict.scores if score.evaluator == "trajectory")
+    assert score.gating is False
+    assert score.passed is True
+    assert score.reason == "[non-gating evaluator error: RuntimeError]"
+
+
+def test_gating_evaluator_exception_stops_progression():
+    gate = BuiltEvaluator(
+        name="goal_success",
+        evaluator=cast(Evaluator, _RaisingEvaluator()),
+        threshold=1.0,
+    )
+
+    with pytest.raises(RuntimeError, match="judge unavailable"):
+        _checkpoint("implement", [gate], request="r", actual_output="o")
 
 
 def test_scores_are_averaged():
@@ -129,9 +223,24 @@ def test_gating_evaluator_below_threshold_still_fails():
     assert verdict.passed is False
 
 
-def test_no_evaluators_passes_by_default():
-    verdict = _checkpoint("noop", [], request="r", actual_output="o", session=None)
-    assert verdict.passed is True
+@pytest.mark.parametrize(
+    "evaluators",
+    [
+        [],
+        [
+            _built(
+                "telemetry_only",
+                [EvaluationOutput(score=1.0, test_pass=True, reason="informational")],
+                gating=False,
+            )
+        ],
+    ],
+)
+def test_checkpoint_without_a_gating_evaluator_fails_closed(evaluators):
+    verdict = _checkpoint("noop", evaluators, request="r", actual_output="o", session=None)
+    assert verdict.passed is False
+    assert verdict.scores == []
+    assert verdict.diagnosis == "checkpoint configuration has no gating evaluator"
 
 
 def test_bounded_out_swarm_fails_regardless_of_score():

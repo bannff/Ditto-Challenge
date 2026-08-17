@@ -40,7 +40,7 @@ from pathlib import Path
 from self_improving_coding_agent.cli import render_replay
 from self_improving_coding_agent.contracts import BlockType, NodeState
 from self_improving_coding_agent.ledger import Ledger
-from self_improving_coding_agent.recorder import RunRecorder, _record_args
+from self_improving_coding_agent.recorder import RunRecorder
 from self_improving_coding_agent.recover import plan_recovery
 from self_improving_coding_agent.settings import get_settings
 from self_improving_coding_agent.worktree import BRANCH_PREFIX, Worktree
@@ -68,18 +68,16 @@ def _resolved_run(ledger: Ledger, run_id: str) -> RunRecorder:
     for node in ("discover", "implement", "verify", "learn"):
         recorder.record_status({"node": node, "state": str(NodeState.RUNNING)})
         if node == "implement":
-            # A write_file call, recorded through the same projection the live SDK hook
-            # uses: the path verbatim, the file content only as size + digest.
+            # Tool records carry safe completion metadata only; arbitrary arguments and
+            # tool output never reach the audit chain.
             recorder.append(
                 BlockType.TOOL_CALL,
                 {
                     "node": node,
                     "tool": "write_file",
-                    "args": _record_args(
-                        "write_file",
-                        {"path": "inventory.py", "content": "def reorder_level(qty):\n    ..."},
-                    ),
-                    "status": "success",
+                    "completed": True,
+                    "cancelled": False,
+                    "error_category": "none",
                 },
             )
         recorder.record_status({"node": node, "state": str(NodeState.COMPLETE), "eval_score": 0.9})

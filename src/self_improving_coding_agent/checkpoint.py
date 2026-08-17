@@ -1,21 +1,12 @@
-"""Eval checkpoint: score a finished node, decide pass/fail, diagnose on failure.
-
-This is the gate that drives the self-heal loop. It also owns the boundary between SDK
-types and our contracts (Status -> Outcome/NodeState, EvaluationOutput -> EvaluatorScore)
-so nothing else has to know the SDK's shapes.
-"""
-
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 
 from strands.models.model import Model
-from strands.multiagent.base import Status
-from strands_evals.detectors import ConfidenceLevel, diagnose_session
+from strands.multiagent import Status
+from strands_evals.detectors import ConfidenceLevel, detect_failures
 from strands_evals.evaluators import Evaluator
-from strands_evals.types.detector import DiagnosisResult
-from strands_evals.types.evaluation import EvaluationData, EvaluationOutput
+from strands_evals.types import EvaluationData, EvaluationOutput
 from strands_evals.types.trace import Session
 
 from .contracts import EvaluatorScore, NodeState, Verdict
@@ -33,20 +24,25 @@ def to_node_state(status: Status) -> NodeState:
     return _STATE_BY_STATUS.get(status, NodeState.PENDING)
 
 
-@dataclass
 class BuiltEvaluator:
     """An evaluator already constructed with the shared model, plus its gate threshold."""
 
-    name: str
-    evaluator: Evaluator
-    threshold: float
-    gating: bool = True
+    def __init__(
+        self,
+        name: str,
+        evaluator: Evaluator,
+        threshold: float,
+        gating: bool = True,
+        assertion: str | None = None,
+    ) -> None:
+        self.name = name
+        self.evaluator = evaluator
+        self.threshold = threshold
+        self.gating = gating
+        self.assertion = assertion
 
 
 def _aggregate(be: BuiltEvaluator, outputs: list[EvaluationOutput]) -> EvaluatorScore:
-    """Fold an evaluator's per-item outputs into one score using the SDK's own aggregator,
-    which yields the mean score plus the evaluator's all-pass verdict. Non-gating
-    evaluators are recorded (with their verdict) but never fail the node."""
     score, all_pass, reason = be.evaluator.aggregator(outputs)
     verdict = "all-pass" if all_pass else "some items failed"
     return EvaluatorScore(
@@ -59,24 +55,50 @@ def _aggregate(be: BuiltEvaluator, outputs: list[EvaluationOutput]) -> Evaluator
     )
 
 
-def _format_diagnosis(result: DiagnosisResult) -> str | None:
-    """Render the detector's full picture — which span failed, why, and the fix — not just
-    the fix recommendation, so a failed checkpoint is legible to the redo and the report."""
-    rca = {r.failure_span_id: r for r in result.root_causes}
-    lines = []
-    for failure in result.failures:
-        parts = [f"[{failure.span_id}] {', '.join(failure.category) or 'failure'}"]
-        if failure.evidence:
-            parts.append(f"evidence: {failure.evidence[0]}")
-        cause = rca.get(failure.span_id)
-        if cause is not None:
-            parts.append(
-                f"root cause ({cause.causality}/{cause.completion_status}): "
-                f"{cause.root_cause_explanation}"
-            )
-            parts.append(f"fix ({cause.fix_type}): {cause.fix_recommendation}")
-        lines.append(" | ".join(parts))
-    return "\n".join(lines)[:1500] or None
+def _error_score(be: BuiltEvaluator, error: Exception) -> EvaluatorScore:
+    return EvaluatorScore(
+        evaluator=be.name,
+        score=0.0,
+        threshold=be.threshold,
+        passed=True,
+        reason=f"[non-gating evaluator error: {type(error).__name__}]",
+        gating=False,
+    )
+
+
+async def _detector_score(session: Session, model: Model | str | None) -> EvaluatorScore:
+    # detect_failures replaces the stock TrajectoryEvaluator for long traces: it
+    # serializes the session once, and when that would blow the judge's context it
+    # falls back to the SDK's token-aware chunking (split_spans_by_tokens) and merges
+    # per-chunk findings. It's a sync API, so run it off the event loop.
+    try:
+        result = await asyncio.to_thread(
+            detect_failures,
+            session,
+            model=model,
+            confidence_threshold=ConfidenceLevel.MEDIUM,
+        )
+    except Exception as error:
+        return EvaluatorScore(
+            evaluator="trajectory_diagnostic",
+            score=0.0,
+            threshold=1.0,
+            passed=True,
+            reason=f"[non-gating detector error: {type(error).__name__}]",
+            gating=False,
+        )
+    categories = sorted({category for failure in result.failures for category in failure.category})
+    reason = "[no detected trajectory failures]" if not categories else (
+        "[detected categories: " + ", ".join(categories[:8]) + "]"
+    )
+    return EvaluatorScore(
+        evaluator="trajectory_diagnostic",
+        score=1.0 if not categories else 0.0,
+        threshold=1.0,
+        passed=True,
+        reason=reason[:500],
+        gating=False,
+    )
 
 
 async def run_checkpoint(
@@ -90,9 +112,6 @@ async def run_checkpoint(
     attempts: int = 1,
     swarm_status: Status | None = None,
 ) -> Verdict:
-    # Circuit-breaker signal comes first: a swarm that hit its bounds (max_iterations /
-    # timeout / handoffs) returns non-COMPLETED with partial text. That never passes,
-    # regardless of what the judges think of the partial output.
     if swarm_status is not None and swarm_status != Status.COMPLETED:
         return Verdict(
             node=node_name,
@@ -104,32 +123,39 @@ async def run_checkpoint(
             ),
         )
 
-    data = EvaluationData(
-        input=request,
-        actual_output=actual_output,
-        actual_trajectory=session,
-        name=node_name,
-    )
-    # evaluate_async avoids the per-evaluator worker-thread + throwaway-event-loop the
-    # sync .evaluate spins up from inside this already-async driver.
-    outputs = await asyncio.gather(*(be.evaluator.evaluate_async(data) for be in built_evaluators))
-    scores = [
-        _aggregate(be, out) for be, out in zip(built_evaluators, outputs, strict=True)
-    ]
-    passed = all(s.passed for s in scores if s.gating)
+    if not any(evaluator.gating for evaluator in built_evaluators):
+        return Verdict(
+            node=node_name,
+            passed=False,
+            attempts=attempts,
+            diagnosis="checkpoint configuration has no gating evaluator",
+        )
 
-    diagnosis = None
-    if not passed and session is not None:
-        # ON_FAILURE: only diagnose a failed checkpoint. Best-effort — a detector error
-        # must not sink the run.
-        try:
-            result = diagnose_session(
-                session, model=diagnose_model, confidence_threshold=ConfidenceLevel.MEDIUM
-            )
-            diagnosis = _format_diagnosis(result)
-        except Exception:
-            diagnosis = None
+    def _data(be: BuiltEvaluator) -> EvaluationData:
+        return EvaluationData(
+            input=request,
+            actual_output=actual_output,
+            actual_trajectory=session,
+            name=node_name,
+            expected_assertion=be.assertion,
+        )
 
-    return Verdict(
-        node=node_name, passed=passed, attempts=attempts, scores=scores, diagnosis=diagnosis
+    results = await asyncio.gather(
+        *(be.evaluator.evaluate_async(_data(be)) for be in built_evaluators),
+        return_exceptions=True,
     )
+    scores: list[EvaluatorScore] = []
+    for evaluator, result in zip(built_evaluators, results, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception) or evaluator.gating:
+                raise result
+            scores.append(_error_score(evaluator, result))
+        else:
+            scores.append(_aggregate(evaluator, result))
+    passed = all(score.passed for score in scores if score.gating)
+    # Trajectory diagnostic on every Implement session, pass or fail. Informational
+    # only: it never touches `passed`, and its errors degrade to a non-gating score.
+    if node_name == "implement" and session is not None:
+        scores.append(await _detector_score(session, diagnose_model))
+
+    return Verdict(node=node_name, passed=passed, attempts=attempts, scores=scores)

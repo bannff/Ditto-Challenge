@@ -39,6 +39,7 @@ from artifacts import (
 from demo import TARGET_APP, TARGET_APP_2, materialize  # same scripts/ dir
 
 from self_improving_coding_agent.contracts import Lesson, Outcome, RunReport, Ticket
+from self_improving_coding_agent.deep_dive import DeepDiveWriter
 from self_improving_coding_agent.ledger import Ledger
 from self_improving_coding_agent.memory import LessonMemory
 from self_improving_coding_agent.workflow import run_ticket
@@ -116,19 +117,77 @@ def _inventory_excludes_discontinued(repo: Path, branch: str) -> bool:
     )
 
 
-def _summary_path_also_locked(repo: Path, branch: str) -> bool:
-    """Did the fix sweep EVERY read path, or only the one the ticket named?
-
-    The acceptance test covers GET /orders/<id>. The sibling summary path reads the same
-    resource and is just as exposed — the memory-only rule says to close both.
-    """
-    service = _committed(repo, branch, "service.py")
-    body = service.split("def order_summary", 1)
-    if len(body) < 2:
+def _records_fixed_read_denials(repo: Path, branch: str) -> bool:
+    """Check the recalled audit rule without executing the changed target."""
+    try:
+        audit = ast.parse(_committed(repo, branch, "audit.py"))
+        service = ast.parse(_committed(repo, branch, "service.py"))
+    except SyntaxError:
         return False
-    # the next def ends the method
-    method = body[1].split("\n    def ", 1)[0]
-    return "require_owner" in method
+
+    fixed_values = {"authorization_denied", "order.read", "denied"}
+    if not fixed_values <= {
+        node.value
+        for node in ast.walk(audit)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }:
+        return False
+
+    order_service = next(
+        (
+            node
+            for node in service.body
+            if isinstance(node, ast.ClassDef) and node.name == "OrderService"
+        ),
+        None,
+    )
+    if order_service is None:
+        return False
+    methods = {
+        node.name: node
+        for node in order_service.body
+        if isinstance(node, ast.FunctionDef)
+    }
+
+    def calls(method: ast.FunctionDef, name: str) -> bool:
+        return any(
+            isinstance(node, ast.Call)
+            and ((isinstance(node.func, ast.Name) and node.func.id == name) or (
+                isinstance(node.func, ast.Attribute) and node.func.attr == name
+            ))
+            for node in ast.walk(method)
+        )
+
+    def records_denial(method: ast.FunctionDef) -> bool:
+        return any(
+            isinstance(node, ast.ExceptHandler)
+            and isinstance(node.type, ast.Name)
+            and node.type.id == "ForbiddenError"
+            and any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "record"
+                and len(call.args) == 1
+                and isinstance(call.args[0], ast.Call)
+                and isinstance(call.args[0].func, ast.Name)
+                and call.args[0].func.id == "AuditEvent"
+                for call in ast.walk(node)
+            )
+            for node in ast.walk(method)
+        )
+
+    boundary = methods.get("_authorize_read")
+    return all(
+        method is not None
+        and (
+            calls(method, "require_owner") and records_denial(method)
+            or calls(method, "_authorize_read")
+            and boundary is not None
+            and calls(boundary, "require_owner")
+            and records_denial(boundary)
+        )
+        for method in (methods.get("get_order"), methods.get("order_summary"))
+    )
 
 
 SCENARIOS = {
@@ -150,21 +209,22 @@ SCENARIOS = {
         target=TARGET_APP_2,
         recall_query="fix broken object-level authorization on an order read path",
         rule=(
-            "Hard-won rule from a prior run (deliberately NOT written in the code): when you "
-            "close a broken object-level authorization hole, sweep EVERY read path for that "
-            "resource, not just the one the ticket names. A prior run fixed get_order but "
-            "left OrderService.order_summary (GET /orders/<id>/summary) reading the same "
-            "order with no ownership check, so the leak survived the fix and the incident "
-            "reopened. Apply require_owner to every operation that loads an order by id."
+            "Hard-won external policy (deliberately NOT written in the code): an authenticated "
+            "cross-user order read denial must record exactly one scrubbed in-memory audit "
+            "event. It has only event_type='authorization_denied', action='order.read', and "
+            "outcome='denied'; it must not include a token, identifier, request data, exception "
+            "text, or arbitrary metadata. Do not record successful reads, unauthenticated "
+            "failures, or not-found orders. Put the recording at the service authorization "
+            "boundary, not generic API exception handling."
         ),
-        check_label="summary read path also locked?",
-        check=_summary_path_also_locked,
+        check_label="fixed read-denial audit seam present?",
+        check=_records_fixed_read_denials,
     ),
 }
 
 
 def _run(
-    label: str, scenario: Scenario, memory: LessonMemory
+    label: str, scenario: Scenario, memory: LessonMemory, out_dir: Path | None = None
 ) -> tuple[RunReport, Path, Ledger, str]:
     ticket = Ticket.model_validate(json.loads(scenario.ticket.read_text()))
     repo = materialize(Path(tempfile.mkdtemp(prefix=f"autodev_{label}_")) / "repo",
@@ -178,8 +238,21 @@ def _run(
         print(line)
         lines.append(line)
 
-    report = run_ticket(ticket, memory=memory, ledger=ledger, status_cb=trace,
-                        telemetry_console=False)
+    # Auxiliary evidence lives BESIDE the canonical root: the offline verifier requires
+    # the self-improvement root to contain exactly contrast.json + control/ + primed/.
+    deep_dive = (
+        DeepDiveWriter(out_dir.with_name(out_dir.name + "-deep-dive"))
+        if out_dir is not None
+        else None
+    )
+    report = run_ticket(
+        ticket,
+        memory=memory,
+        ledger=ledger,
+        status_cb=trace,
+        telemetry_console=False,
+        deep_dive_cb=deep_dive.record if deep_dive is not None else None,
+    )
     accept = report.acceptance.exit_code if report.acceptance else "n/a"
     print(f"[{label}] outcome={report.outcome} acceptance_exit={accept}")
     return report, repo, ledger, "\n".join(lines) + "\n"
@@ -239,9 +312,11 @@ def main(argv: list[str]) -> int:
     print()
 
     control_report, control_repo, control_ledger, control_trace = _run(
-        "control", scenario, control_mem
+        "control", scenario, control_mem, args.out
     )
-    primed_report, primed_repo, primed_ledger, primed_trace = _run("primed", scenario, primed_mem)
+    primed_report, primed_repo, primed_ledger, primed_trace = _run(
+        "primed", scenario, primed_mem, args.out
+    )
 
     print(f"\n=== hidden business-rule check ({scenario.check_label}) ===")
     control_check = _verify(scenario, control_report, control_repo)

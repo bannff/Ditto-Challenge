@@ -26,12 +26,11 @@ from strands_evals.evaluators import (
     ResponseRelevanceEvaluator,
     ToolParameterAccuracyEvaluator,
     ToolSelectionAccuracyEvaluator,
-    TrajectoryEvaluator,
 )
 from strands_evals.types.trace import EvaluationLevel
 
 from .contracts import LessonDraft
-from .eval_scope import AgentToolsExtractor
+from .eval_scope import AgentToolsExtractor, BoundedSessionExtractor
 from .node import AgentSpec, EvaluatorSpec, NodeConfig
 
 SKILLS = Path(__file__).resolve().parents[2] / "knowledge" / "skills"
@@ -64,8 +63,8 @@ def _rubric(name: str, rubric: str, threshold: float = 0.7) -> EvaluatorSpec:
     )
 
 
-def _judge(name: str, cls, threshold: float) -> EvaluatorSpec:
-    return EvaluatorSpec(name=name, evaluator_cls=cls, threshold=threshold)
+def _judge(name: str, cls, threshold: float, *, gating: bool = True) -> EvaluatorSpec:
+    return EvaluatorSpec(name=name, evaluator_cls=cls, threshold=threshold, gating=gating)
 
 
 def _tool_judge(name: str, cls) -> EvaluatorSpec:
@@ -152,8 +151,11 @@ def build_reference_nodes(
                 role="builder",
                 system_prompt=(
                     _preamble("Implement") + " As the builder, implement the plan by editing "
-                    "files inside the worktree with the file tools. Make the smallest change "
-                    "that resolves the ticket; add or update a test when it warrants one."
+                    "files inside the worktree with the file tools. Implement the plan "
+                    "completely — every requirement it states, including policies recalled "
+                    "from past lessons, not only what the ticket text names. Make the "
+                    "smallest change that satisfies all of it; add or update a test when it "
+                    "warrants one." + lessons_block
                 ),
             ),
             AgentSpec(
@@ -180,23 +182,33 @@ def build_reference_nodes(
         skill_paths=[SKILLS / "safe-change"],
         evaluators=[
             # The gate: goal attainment over the whole session (binary yes/no), so an
-            # already-correct worktree after a retry still passes. Tool-call and trajectory
-            # judges observe *how* the change was made — informative, never a veto.
-            _judge("goal_success", GoalSuccessRateEvaluator, 1.0),
-            _judge("faithfulness", FaithfulnessEvaluator, 0.75),
+            # already-correct worktree after a retry still passes. Session-level judges
+            # build ONE prompt from the whole trace, so the gate reads it through the
+            # bounded extractor — a long run must not be able to crash its own gate.
+            # Tool-call and trajectory judges observe *how* the change was made —
+            # informative, never a veto.
+            EvaluatorSpec(
+                name="goal_success",
+                evaluator_cls=GoalSuccessRateEvaluator,
+                threshold=1.0,
+                trace_extractor=BoundedSessionExtractor(),
+                # Without explicit criteria the judge infers goals — live runs failed a
+                # correct fix for "not running the tests" when the swarm has no test tool
+                # by design (the platform runs the authoritative gate afterward).
+                assertion=(
+                    "SUCCESS if the agents wrote a concrete code change to the worktree "
+                    "(visible as write_file tool calls) that implements what the ticket "
+                    "and plan asked for, including any recalled policy requirements. The "
+                    "agents work only through file read/write tools: they cannot execute "
+                    "tests, shells, or commands, and a separate platform gate runs the "
+                    "authoritative test suite after this evaluation — so do not require "
+                    "test execution, and do not fail for its absence. FAILURE only if the "
+                    "change is missing, clearly wrong, or unrelated to the ticket."
+                ),
+            ),
+            _judge("faithfulness", FaithfulnessEvaluator, 0.75, gating=False),
             _tool_judge("tool_params", ToolParameterAccuracyEvaluator),
             _tool_judge("tool_selection", ToolSelectionAccuracyEvaluator),
-            EvaluatorSpec(
-                name="trajectory",
-                evaluator_cls=TrajectoryEvaluator,
-                params={"rubric": (
-                    "Judge the path taken to the change: did the agent read the code it "
-                    "needed before editing, keep the edit scoped to the ticket, and avoid "
-                    "redundant or irrelevant work?"
-                )},
-                threshold=0.7,
-                gating=False,
-            ),
         ],
         max_handoffs=16,
         max_iterations=16,

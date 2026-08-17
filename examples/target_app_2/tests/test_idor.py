@@ -12,8 +12,15 @@ def test_cannot_read_another_users_order(app):
     assert resp.status == 403
 
 
-def test_admin_may_read_any_order(app):
+def test_cannot_read_another_users_order_summary(app):
     api, tokens, order_id = app
-    resp = api.handle("GET", f"/orders/{order_id}", token=tokens["admin"])
-    assert resp.status == 200
-    assert resp.body["id"] == order_id
+    resp = api.handle("GET", f"/orders/{order_id}/summary", token=tokens["bob"])
+    assert resp.status == 403
+
+
+def test_admin_may_read_any_order_or_summary(app):
+    api, tokens, order_id = app
+    for path in (f"/orders/{order_id}", f"/orders/{order_id}/summary"):
+        resp = api.handle("GET", path, token=tokens["admin"])
+        assert resp.status == 200
+        assert resp.body["id"] == order_id

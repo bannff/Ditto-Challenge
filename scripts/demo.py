@@ -27,6 +27,7 @@ from pathlib import Path
 from artifacts import safe_output_name, write_run_bundle
 
 from self_improving_coding_agent.contracts import RunReport, Ticket
+from self_improving_coding_agent.deep_dive import DeepDiveWriter
 from self_improving_coding_agent.ledger import Ledger
 from self_improving_coding_agent.settings import get_settings
 from self_improving_coding_agent.workflow import run_ticket
@@ -103,7 +104,15 @@ def run(ticket_path: Path, out_dir: Path | None = None, target: Path = TARGET_AP
         lines.append(line)
 
     ledger = Ledger(get_settings().ledger_db)
-    report = run_ticket(ticket, status_cb=trace, telemetry_console=False, ledger=ledger)
+    # Beside the per-run bundle directories, named so it can't be mistaken for one.
+    deep_dive = DeepDiveWriter(out_dir / "deep-dive") if out_dir is not None else None
+    report = run_ticket(
+        ticket,
+        status_cb=trace,
+        telemetry_console=False,
+        ledger=ledger,
+        deep_dive_cb=deep_dive.record if deep_dive is not None else None,
+    )
     _summary(report)
     if out_dir is not None:
         write_run_bundle(

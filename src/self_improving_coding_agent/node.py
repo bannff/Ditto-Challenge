@@ -43,6 +43,11 @@ class EvaluatorSpec:
     # calls). The concrete SDK evaluators don't forward this through their __init__, so the
     # engine attaches it after construction.
     trace_extractor: Any = None
+    # Optional human-authored success criteria. GoalSuccessRateEvaluator with no assertion
+    # infers the goals from the conversation — and infers wrong ones (it failed live runs
+    # for "not running the tests" when the agent has no test tool by design). An assertion
+    # flips it to judging against these explicit criteria instead.
+    assertion: str | None = None
 
 
 @dataclass
