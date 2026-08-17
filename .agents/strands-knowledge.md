@@ -147,8 +147,9 @@ state for resume.
 
 ## Environment
 
-- AWS creds refresh: `./scripts/refresh-creds.sh` (reads `ADA_ACCOUNT`/`ADA_ROLE`/
-  `ADA_PROVIDER`/`AWS_PROFILE` from the gitignored `.env` — no account IDs in source).
+- AWS creds: resolved by the standard boto3 chain (SSO, profile, env vars, instance
+  role) from `AWS_REGION`/`AWS_PROFILE` in the gitignored `.env`. Nothing in the repo
+  is tied to how they were obtained.
 - The shell env may default `AWS_PROFILE` to something else — the script and app read it
   from `.env`; export `AWS_PROFILE=default` if running commands by hand.
 - The `default` profile has no region; `AWS_REGION` comes from `.env` (us-east-1 here).

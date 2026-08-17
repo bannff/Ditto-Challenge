@@ -24,8 +24,7 @@ below, then verify the resulting bundle offline.
 - AWS credentials with access to Bedrock in the selected account
 
 ```bash
-uv sync
-cp .env.example .env
+make setup     # uv sync, then .env from the example
 ```
 
 Configuration is environment-driven. Set these values in `.env`:
@@ -38,9 +37,21 @@ Configuration is environment-driven. Set these values in `.env`:
 | `BEDROCK_EMBED_MODEL_ID` | Embeddings model ID for memory |
 | `AWS_REGION`, `AWS_PROFILE` | Bedrock region and credential profile |
 
-All LLM calls use Bedrock. Model values must be current-generation Bedrock cross-region
-inference-profile IDs supplied by the environment; bare model IDs and prior-generation
-models are not supported.
+All LLM calls use Bedrock, and every model comes from the environment — there are no model
+IDs in source. The values in `.env.example` are the ones these results were produced with:
+
+| Role | Model |
+|---|---|
+| Builder | `us.anthropic.claude-haiku-4-5-20251001-v1:0` |
+| Reviewer | `us.amazon.nova-2-lite-v1:0` |
+| Third voice / adversarial reviewer | `us.anthropic.claude-sonnet-5` |
+| Embeddings (memory) | `amazon.titan-embed-text-v2:0` |
+
+Three different model families on purpose: a reviewer that shares the builder's blind spots
+agrees with it. Values must be current-generation cross-region inference-profile IDs; bare
+model IDs and prior-generation models are rejected. Credentials resolve through the standard
+boto3 chain, so any account with Bedrock access to these models works — swap the IDs for
+whatever you have enabled.
 
 ## CLI core
 
