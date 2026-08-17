@@ -57,8 +57,7 @@ with the commands below.
 
 ## What I wish I had more time for
 
-Honesty is a feature. Each of these is bounded by something already in place — none is a
-silent hole:
+Each of these is bounded by something already in place:
 
 - **A real spend ceiling.** Runs are bounded by handoffs, iterations, and wall clock, but
   there's no cumulative token/dollar cap. The seam already exists (every model call goes
@@ -70,11 +69,11 @@ silent hole:
 - **Signed evidence.** The ledger is tamper-evident, not tamper-proof: whoever can rewrite
   a whole exported bundle can rewrite its recorded head. One KMS signature on the chain
   head closes it.
-- **Known holes, kept loud.** A handful of adversarial tests are `xfail(strict=true)` —
+- **Known holes** A handful of adversarial tests are `xfail(strict=true)` —
   each encodes a hole I found but haven't closed, and the suite *fails* the moment a fix
-  lands, so the marker can never go stale. Finding your own escapes is the job.
+  lands, so the marker can never go stale.
 - **Memory hygiene at scale.** Lessons are scrubbed, deduplicated, and provenance-gated,
-  but not repo-scoped or expiry-managed — fine for one repo, needs tenancy for a fleet.
+  but not repo-scoped or expiry-managed. Needs tenancy for a fleet.
 
 ## Two commands
 
