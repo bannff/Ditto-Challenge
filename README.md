@@ -17,7 +17,7 @@ The workflow is a tour of best practices, and I'll name them as we go:
   one strong (frugality). A reviewer that shares the builder's blind spots just
   agrees with it; the third voice is explicitly adversarial — its job is to break the change (Adversarial Self Prompting).
 - **Evals as infrastructure** [strands-evals]. An eval harness on every node, judged against
-  *that node's* job — not one vibes-check over the whole workflow. Evals govern rollback and
+  *that node's* job — not one vibe-check over the whole workflow. Evals govern rollback and
   retry: a failed checkpoint restores the last known-good tree and retries with the diagnosis
   attached. Evals route; they never decide correctness — only the test gate does that.
 - **A deterministic circuit breaker.** Retries are finite. When they're spent, the run
