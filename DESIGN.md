@@ -2,24 +2,35 @@
 
 `autodev` resolves one typed ticket against one repository. Seven subsystems, each with one job:
 
-- **A pre-gate** — deterministic, grammar-based triage into bug / feature / refuse, before a
-  worktree exists or a token is spent.
-- **Strands as the entire agent plane** — `Swarm`, `GraphBuilder`, `strands_evals`, skills,
-  steering, sessions. Bedrock only, models from the environment, nothing hand-rolled that the
-  SDK already does.
-- **A graph** for the steps that must happen in order: discover, implement, verify, learn. That
-  sequence is a property of the work, not a decision to leave to a model.
-- **A swarm inside each node**, so effort scales with the repository instead of the config. A
-  one-line off-by-one is often one agent and one turn; a change spanning modules hands off
-  between builder, reviewer and adversary until it converges or hits its bound.
-- **An eval harness on every node**, judged against *that* node's job — discovery on
-  faithfulness to the repo, implementation on goal success. A failed checkpoint rolls the tree
-  back and retries with the diagnosis attached.
-- **A deterministic circuit breaker** owning failure: retries are finite, and exhausting them
-  ends the run as degraded rather than shipping something half-applied.
-- **A hash-chained ledger** underneath, making a run reconstructable, tamper-evident, and
-  replayable from recorded model-call digests — and, the part that earns its keep, trustworthy
-  enough to learn from. Memory accepts a lesson only from a run whose chain verifies.
+- **A pre-gate.** Deterministic, grammar-based triage into bug / feature / refuse before a
+  worktree exists or a token is spent. *Why:* refusal should be a first-class answer, not a
+  failure mode — an unsafe ticket ought to cost nothing, and the cheapest decision is the one
+  made before you start.
+- **A graph for control.** Discover → implement → verify → learn, in that order, owned by the
+  platform. *Why:* the sequence is a property of the work, not a judgement call. An agent that
+  can reorder its own stages can skip the one that verifies, and a fixed spine is what makes a
+  run reproducible and auditable.
+- **A swarm for intelligence, inside every node.** *Why:* effort tracks the repository instead
+  of the config, and it scales to zero — a one-line off-by-one is often one agent and one turn,
+  because the model decides the task is done rather than a loop counter deciding for it. A
+  change spanning modules keeps handing off across a shared, automatically managed context
+  window until it converges or hits its bound. The three agents are three *different model
+  families*, so the review is an ensemble rather than an echo — and it is two cheap models plus
+  one strong one, so the expensive model only weighs in where it earns its cost.
+- **An eval harness on every node,** judged against *that* node's job — discovery on
+  faithfulness to the repo, implementation on goal success. *Why:* a bad step gets caught at the
+  step. A failed checkpoint rolls the tree back and retries with the diagnosis attached, instead
+  of a wrong turn compounding for three more stages.
+- **A deterministic circuit breaker.** Retries are finite; exhausting them ends the run as
+  degraded. *Why:* failure has to be bounded and honest — the alternative to stopping is
+  shipping something half-applied, which is worse than shipping nothing.
+- **A hash-chained ledger underneath.** Every block links to its predecessor's hash, so a run is
+  reconstructable, tamper-evident, and replayable from recorded model-call digests. *Why:* it is
+  what makes a run *provable enough to learn from*. Memory accepts a lesson only from a run
+  whose chain verifies, which is how the system stays junk-resistant as it teaches itself.
+- **Strands for all of it.** The agent plane is the SDK — multi-agent orchestration, the eval
+  harness, skills, steering, sessions — on Bedrock, with models supplied by the environment.
+  *Why:* every hand-rolled agent loop is code someone has to audit and nobody else has tested.
 
 The rule the design keeps returning to: the model reads and edits through three tools and
 nothing else. Refusal, execution, acceptance, rollback and evidence belong to the platform,
