@@ -23,6 +23,7 @@ from .memory import LessonMemory, make_memory_tools
 from .nodes import build_reference_nodes
 from .recorder import RunRecorder
 from .refusal import should_refuse
+from .scrub import scrub_text
 from .settings import get_settings
 from .telemetry import setup_telemetry
 from .tools import make_worktree_tools
@@ -65,6 +66,50 @@ def _evidence(unshippable: str | None, diff: str) -> str:
     if unshippable is None:
         return diff
     return f"not shipped: {unshippable}\n\n{diff}"
+
+
+_MAX_SUMMARY_CHARS = 2_000
+
+
+def _summary(
+    outcome: Outcome,
+    wf: WorkflowResult,
+    acceptance: AcceptanceResult | None,
+    branch: str | None,
+    unshippable: str | None,
+) -> str:
+    """The reviewer's first read: a deterministic headline, then Verify's own prose.
+
+    The headline states only what the platform observed (gate result, branch, breaker), so
+    it cannot overclaim. The Verify swarm's closing output is the model's evidence-checking
+    narrative — it already cites the diff and test results, and was previously discarded
+    with the transcript. Scrubbed and bounded like every free-text field.
+    """
+    if acceptance is None:
+        gate = "the acceptance gate did not run"
+    else:
+        gate = (
+            f"the acceptance gate passed (`{acceptance.command}` exited 0)"
+            if acceptance.passed
+            else (
+                f"the acceptance gate FAILED "
+                f"(`{acceptance.command}` exited {acceptance.exit_code})"
+            )
+        )
+    if outcome == Outcome.SUCCESS:
+        headline = f"Resolved: {gate}; the change is one commit on branch {branch}."
+    elif wf.degraded:
+        headline = (
+            "Degraded: the run hit its retry or time bounds before finishing; "
+            "nothing was shipped and the target tree was left clean."
+        )
+    elif unshippable:
+        headline = f"Not shipped: {unshippable}; {gate}. The target tree was left clean."
+    else:
+        headline = f"Not resolved: {gate}; the change was reverted and nothing shipped."
+    review = " ".join((wf.outputs.get("verify") or "").split())
+    text = f"{headline}\n\n{review}" if review else headline
+    return scrub_text(text)[:_MAX_SUMMARY_CHARS]
 
 
 def _lesson_content(wf: WorkflowResult) -> str | None:
@@ -125,8 +170,15 @@ def run_ticket(
         # The refusal path gets a chain too: a declined ticket is a real outcome and has
         # to be as auditable as a resolved one.
         recorder.append(BlockType.RUN_END, {"outcome": str(Outcome.REFUSED), "reason": reason})
-        report = RunReport(run_id=run_id, ticket=ticket, outcome=Outcome.REFUSED, evidence=reason)
-        ledger.save(report)  # the stored copy is scrubbed and bounded; the caller keeps the full report
+        report = RunReport(
+            run_id=run_id,
+            ticket=ticket,
+            outcome=Outcome.REFUSED,
+            summary=f"Refused before any work began: {reason} No worktree was created.",
+            evidence=reason,
+        )
+        # The stored copy is scrubbed and bounded; the caller keeps the full report.
+        ledger.save(report)
         deep_dive_finalized = True
         head = ledger.head(run_id)
         recorder.observe(
@@ -158,7 +210,11 @@ def run_ticket(
         # nothing may ship — and the chain gets its RUN_END so it doesn't dangle.
         recorder.append(BlockType.RUN_END, {"outcome": str(Outcome.REFUSED), "reason": str(e)})
         report = RunReport(
-            run_id=run_id, ticket=ticket, outcome=Outcome.REFUSED, evidence=f"cannot start: {e}"
+            run_id=run_id,
+            ticket=ticket,
+            outcome=Outcome.REFUSED,
+            summary=f"Refused: the run could not start ({e}). Nothing was attempted.",
+            evidence=f"cannot start: {e}",
         )
         ledger.save(report)
         return report
@@ -322,6 +378,13 @@ def run_ticket(
             ticket=ticket,
             branch=worktree.branch if keep_branch else None,
             outcome=outcome,
+            summary=(
+                f"Refused: {refusal} Nothing shipped."
+                if refusal
+                else _summary(
+                    outcome, wf, acceptance, worktree.branch if keep_branch else None, unshippable
+                )
+            ),
             verdicts=wf.verdicts,
             acceptance=acceptance,
             # The whole diff; the ledger bounds its own row. A tree that passed its gate and
@@ -353,7 +416,8 @@ def run_ticket(
             BlockType.RUN_END,
             {"outcome": str(outcome), "branch": report.branch, "learned": may_learn},
         )
-        ledger.save(report)  # the stored copy is scrubbed and bounded; the caller keeps the full report
+        # The stored copy is scrubbed and bounded; the caller keeps the full report.
+        ledger.save(report)
         deep_dive_finalized = True
         head = ledger.head(run_id)
         recorder.observe(

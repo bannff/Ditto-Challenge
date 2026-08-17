@@ -97,6 +97,8 @@ class StrictRunReport(_StrictModel):
     branch: str | None = None
     worktree: str | None = None
     outcome: Outcome
+    # Optional so bundles exported before the field existed still verify.
+    summary: str = ""
     verdicts: list[StrictVerdict]
     acceptance: StrictAcceptance | None = None
     evidence: str

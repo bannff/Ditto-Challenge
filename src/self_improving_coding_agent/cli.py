@@ -42,6 +42,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"recording model I/O to {cassette.path} (unredacted, owner-only)")
     report = run_ticket(ticket, cassette=cassette)
     print(f"run {report.run_id}: {report.outcome}")
+    if report.summary:
+        print(f"\n{report.summary}\n")
     print(report.model_dump_json(indent=2))
     return 0 if report.outcome in _OK_OUTCOMES else 1
 

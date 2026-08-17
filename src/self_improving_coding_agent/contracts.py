@@ -140,6 +140,10 @@ class RunReport(BaseModel):
     branch: str | None = None
     worktree: str | None = None
     outcome: Outcome = Outcome.INCONCLUSIVE
+    # Plain-English reviewer summary: one deterministic headline from the platform, then the
+    # Verify stage's evidence-checking prose when the workflow produced it. Additive — a
+    # report without one is still valid.
+    summary: str = ""
     verdicts: list[Verdict] = Field(default_factory=list)
     acceptance: AcceptanceResult | None = None
     evidence: str = ""

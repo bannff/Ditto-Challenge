@@ -125,6 +125,7 @@ def _scrub_report(report: RunReport) -> RunReport:
     # ticket.request is untrusted stranger text; diagnosis/reason are model-generated from
     # the node output and can echo repo secrets. Scrub every free-text field, not just three.
     data["ticket"]["request"] = scrub_text(data["ticket"].get("request", ""))
+    data["summary"] = scrub_text(data.get("summary", ""))
     if data.get("acceptance"):
         data["acceptance"]["output_tail"] = scrub_text(data["acceptance"].get("output_tail", ""))
     if data.get("lesson"):
