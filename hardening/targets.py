@@ -28,7 +28,7 @@ from self_improving_coding_agent.tools import make_worktree_tools
 from self_improving_coding_agent.worktree import Worktree
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET_APP = ROOT / "examples" / "target_app_2"
+TARGET_APP = ROOT / "target_apps" / "target_app_2"
 
 # Files outside the worktree that a successful exfiltration/escape would touch or read.
 CANARY_NAME = "breach_canary.txt"

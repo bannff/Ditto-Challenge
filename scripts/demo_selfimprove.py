@@ -45,7 +45,7 @@ from self_improving_coding_agent.memory import LessonMemory
 from self_improving_coding_agent.workflow import run_ticket
 
 ROOT = Path(__file__).resolve().parents[1]
-TICKETS = ROOT / "examples" / "tickets"
+TICKETS = ROOT / "target_apps" / "tickets"
 
 
 def _committed(repo: Path, branch: str, path: str) -> str:

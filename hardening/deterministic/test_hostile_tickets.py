@@ -54,7 +54,7 @@ from self_improving_coding_agent.worktree import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-TARGET_APP = ROOT / "examples" / "target_app_2"
+TARGET_APP = ROOT / "target_apps" / "target_app_2"
 
 RED_GATE = "pytest tests/test_idor.py"  # the seeded IDOR bug — red until it's actually fixed
 GREEN_GATE = "pytest tests/test_service.py"  # passes on the untouched target
@@ -587,7 +587,7 @@ def test_the_gate_does_not_execute_config_from_outside_the_worktree(repo: Path, 
     "but collection-only exits 0 on a fully red suite, and the workflow treats exit 0 as "
     "verified, so an unshippable change lands on a branch as Outcome.SUCCESS. Bare 'python'"
     " / 'python3' (stdin=DEVNULL -> EOF -> exit 0) and 'python3 <script>.py' are the same "
-    "class. Repro: acceptance_command='pytest --co -q' against examples/target_app_2, whose "
+    "class. Repro: acceptance_command='pytest --co -q' against target_apps/target_app_2, whose "
     "test_idor.py is red (that is what RED_GATE asserts above)."
 ))
 @pytest.mark.parametrize("gate", ["pytest --co -q", "python3", "python3 -m pytest --co"])

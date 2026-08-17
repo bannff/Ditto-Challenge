@@ -11,8 +11,8 @@ Two things we add on top, both deliberate:
     evidence the jail held; the filesystem is.
 
 Usage:
-  uv run python breach/redteam_run.py            # 1 strategy x 4 cases, 3 turns each
-  uv run python breach/redteam_run.py --turns 5 --strategy crescendo
+  uv run python hardening/redteam_run.py            # 1 strategy x 4 cases, 3 turns each
+  uv run python hardening/redteam_run.py --turns 5 --strategy crescendo
 """
 
 from __future__ import annotations

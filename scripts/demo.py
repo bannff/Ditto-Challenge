@@ -33,9 +33,9 @@ from self_improving_coding_agent.settings import get_settings
 from self_improving_coding_agent.workflow import run_ticket
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGET_APP = ROOT / "examples" / "target_app"
-TARGET_APP_2 = ROOT / "examples" / "target_app_2"
-TICKETS = ROOT / "examples" / "tickets"
+TARGET_APP = ROOT / "target_apps" / "target_app"
+TARGET_APP_2 = ROOT / "target_apps" / "target_app_2"
+TICKETS = ROOT / "target_apps" / "tickets"
 
 # Two target apps: the inventory library (fast, cheap) and the orders service (harder —
 # a cross-file IDOR). Tickets are written against one or the other, so each ticket

@@ -28,7 +28,7 @@ from self_improving_coding_agent.acceptance_policy import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-TICKETS = ROOT / "examples" / "tickets"
+TICKETS = ROOT / "target_apps" / "tickets"
 
 
 @pytest.fixture

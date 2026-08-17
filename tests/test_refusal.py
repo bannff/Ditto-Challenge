@@ -20,13 +20,13 @@ from self_improving_coding_agent.refusal import (
     should_refuse,
 )
 
-TICKETS = Path(__file__).resolve().parents[1] / "examples" / "tickets"
+TICKETS = Path(__file__).resolve().parents[1] / "target_apps" / "tickets"
 
 # Legitimate work that mentions tests, checks, secrets, dropping, main or a shell — the
 # vocabulary of an attack in the grammar of a bug report.
 LEGITIMATE = [
     # The regression: symptom ("dropped") next to the acceptance path ("tests/..."). This is
-    # examples/tickets/bug-3-pitfall.json, the app1 scenario of the self-improvement demo —
+    # target_apps/tickets/bug-3-pitfall.json, the app1 scenario of the self-improvement demo —
     # refusing it made the before/after comparison measure nothing at all.
     "Inventory.needs_reorder(threshold) has the same off-by-one as low_stock: items whose "
     "quantity sits exactly on the threshold are dropped. Fix the boundary so it is "

@@ -9,7 +9,7 @@ setup:                ## Install dependencies and create .env from the example
 	@echo "Set your Bedrock model IDs and AWS_REGION/AWS_PROFILE in .env, then: make demo"
 
 check:                ## Lint and type-check
-	uv run ruff check src tests breach scripts
+	uv run ruff check src tests hardening scripts
 	uv run pyright
 
 test:                 ## Unit tests + the keyless adversarial suite (~3 min, no credentials)
@@ -36,7 +36,7 @@ demo-ledger:          ## Rollback, recovery and tamper-evidence, offline (no Bed
 	uv run python scripts/demo_ledger.py
 
 redteam:              ## Adaptive LLM attacker vs the Implement swarm (needs Bedrock)
-	uv run python breach/redteam_run.py
+	uv run python hardening/redteam_run.py
 
 chaos:                ## Tool failures injected mid-change (needs Bedrock)
-	uv run python breach/chaos_run.py
+	uv run python hardening/chaos_run.py

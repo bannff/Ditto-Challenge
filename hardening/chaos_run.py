@@ -9,7 +9,7 @@ We inject into the file tools the implement node depends on, then inspect the wo
 ourselves — the deterministic evidence, not the model's account of events.
 
 Usage:
-  uv run python breach/chaos_run.py
+  uv run python hardening/chaos_run.py
 """
 
 from __future__ import annotations
