@@ -1,13 +1,13 @@
-# breach — adversarial testing of the agent loop
+# hardening — adversarial testing of the agent loop
 
 Three layers, cheapest and most authoritative first. The goal is to break the trust
 boundary before a reviewer does, and to keep the evidence.
 
 | layer | what it proves | cost | command |
 |---|---|---|---|
-| **deterministic** | a hostile ticket cannot escape the jail, disable the gate, or leave a dirty tree | free, keyless, seconds | `uv run pytest breach/deterministic -q` |
-| **red team** (`strands_evals.experimental.redteam`) | an adaptive LLM attacker can't talk the swarm past its tool boundary | real Bedrock, minutes | `uv run python breach/redteam_run.py` |
-| **chaos** (`strands_evals.chaos`) | the loop degrades safely when its own tools fail mid-change | real Bedrock, minutes | `uv run python breach/chaos_run.py` |
+| **deterministic** | a hostile ticket cannot escape the jail, disable the gate, or leave a dirty tree | free, keyless, seconds | `uv run pytest hardening/deterministic -q` |
+| **red team** (`strands_evals.experimental.redteam`) | an adaptive LLM attacker can't talk the swarm past its tool boundary | real Bedrock, minutes | `uv run python hardening/redteam_run.py` |
+| **chaos** (`strands_evals.chaos`) | the loop degrades safely when its own tools fail mid-change | real Bedrock, minutes | `uv run python hardening/chaos_run.py` |
 
 Every run writes its transcript and report to `scratch/` so you can follow along.
 

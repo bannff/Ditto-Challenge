@@ -32,6 +32,7 @@ from .contracts import (
     ProvenanceDecision,
     RunReport,
 )
+from .migrations import upgrade
 from .scrub import scrub_text
 
 # A run's diff is unbounded (a wide feature touches many files), but a history row isn't a
@@ -232,7 +233,9 @@ class Ledger:
         return [self._load(j) for (j,) in rows]
 
     def _load(self, report_json: str) -> RunReport:
-        return RunReport.model_validate(json.loads(report_json))
+        # Reads walk the migration chain first, so a report persisted under an older
+        # schema loads under today's model instead of failing validation.
+        return RunReport.model_validate(upgrade("run_report", json.loads(report_json)))
 
     # ---- hash chain -------------------------------------------------------------
 
