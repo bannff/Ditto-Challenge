@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "run_id": "run-cef093835d2c",
+  "expected_outcome": "success",
+  "artifacts": {
+    "trace.log": {
+      "sha256": "4692dda342118696d83aa136190fe9f7434c379d6b710bba48ffefc8f853da22",
+      "bytes": 328
+    },
+    "report.json": {
+      "sha256": "1291dd8280e45f44c2c33228454711e66192d2e6f23f8a13e16ef7764e186ca4",
+      "bytes": 12597
+    },
+    "diff.patch": {
+      "sha256": "0a98b2394715aef927c0870b97499edf51150d6870b2299d66b8b69d41fc7424",
+      "bytes": 578
+    },
+    "chain.json": {
+      "sha256": "0d86dcf24bd2af1b7d468da45eac4398fa6af6bfe4524ca0f04e257a39e73e3c",
+      "bytes": 34096
+    },
+    "chain.log": {
+      "sha256": "832efd8cd0010515b10f9b3d3f3a4a61e28bcee81cf86c6a3abb75e20118f5b6",
+      "bytes": 14690
+    }
+  }
+}

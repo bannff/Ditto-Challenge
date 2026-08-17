@@ -1,0 +1,19 @@
+diff --git a/inventory.py b/inventory.py
+index a510866..580dd9a 100644
+--- a/inventory.py
++++ b/inventory.py
+@@ -117,12 +117,8 @@ class Inventory:
+         "At or below" means an item sitting exactly on the threshold counts as
+         low and should appear in the reorder list.
+         """
+-        # BUG (bug-1): strict < drops items sitting exactly on the threshold,
+-        # so a threshold of 5 misses an item with quantity == 5.
+-        return [item for item in self.items() if item.quantity < threshold]
++        return [item for item in self.items() if item.quantity <= threshold]
+ 
+     def needs_reorder(self, threshold: int) -> list[Item]:
+         """SKUs to reorder: items at or below the threshold, ordered by SKU."""
+-        # BUG (bug-3): strict < repeats low_stock's off-by-one and drops items sitting
+-        # exactly on the threshold.
+-        return [item for item in self.items() if item.quantity < threshold]
++        return [item for item in self.items() if item.quantity <= threshold]

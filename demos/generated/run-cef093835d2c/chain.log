@@ -1,0 +1,373 @@
+replay run-cef093835d2c — 45 blocks
+
+   [  0] run_start         1f309185671c
+        ticket_id: feature-1-acceptance-test
+        domain: feature
+        replaying: False
+   [  1] node_attempt     git:9ccb686a  55ec6d352a82
+        node: discover
+        state: running
+   [  2] model_call       git:9ccb686a  e2a958d291df
+        node: discover
+        agent: scout
+        call: 1
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 1aaae788014a3013a1238aeebaa9de121140d2aa2d9edb62c4fdca5f51d23a61
+        system_hash: b11b6c5d018f8b6e44fed74e7b32b2ec0f61d8b6cd97178fb16d85f7a7adce9d
+        response_hash: 8ecc987caecc768f7b11dde6ab489bdd8e89dea301efaf147c62122e050c77bf
+        stop_reason: tool_use
+        tools_called: ['list_files']
+        input_tokens: 4952
+        output_tokens: 78
+   [  3] tool_call        git:9ccb686a  17c4cbb3a0c1
+        node: discover
+        tool: list_files
+        completed: True
+        cancelled: False
+        error_category: none
+   [  4] model_call       git:9ccb686a  912ee7247459
+        node: discover
+        agent: scout
+        call: 2
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 3aeba731f475243dac859e5af5f0f37dea682a4c2411d7efadbaf3a6dd762e9a
+        system_hash: b11b6c5d018f8b6e44fed74e7b32b2ec0f61d8b6cd97178fb16d85f7a7adce9d
+        response_hash: 74c83af0309a183df1e99d0d4a15e22e18ee5cac4099a2b0a7b62424f78f73d6
+        stop_reason: tool_use
+        tools_called: ['read_file', 'read_file']
+        input_tokens: 5068
+        output_tokens: 117
+   [  5] tool_call        git:9ccb686a  71a78f98a453
+        node: discover
+        tool: read_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [  6] tool_call        git:9ccb686a  0e32f5f3019a
+        node: discover
+        tool: read_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [  7] model_call       git:9ccb686a  79ef0d6eb46f
+        node: discover
+        agent: scout
+        call: 3
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 9de6769b84ce38d7c605d9fc9f3b931437243c86601de20841ab35487570e0f4
+        system_hash: b11b6c5d018f8b6e44fed74e7b32b2ec0f61d8b6cd97178fb16d85f7a7adce9d
+        response_hash: 420979becd2651ca0e7dc345e2f43733a474bbc2dafd3598688cd70075273b44
+        stop_reason: tool_use
+        tools_called: ['list_files']
+        input_tokens: 6670
+        output_tokens: 79
+   [  8] tool_call        git:9ccb686a  15930af5af20
+        node: discover
+        tool: list_files
+        completed: True
+        cancelled: False
+        error_category: none
+   [  9] model_call       git:9ccb686a  de989c4dc2a4
+        node: discover
+        agent: scout
+        call: 4
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: f2ccb93766bb1b1df438a291cc89d0ab7d49ccf1d06765edb1fbbb5423a18874
+        system_hash: b11b6c5d018f8b6e44fed74e7b32b2ec0f61d8b6cd97178fb16d85f7a7adce9d
+        response_hash: c850f582f167785372333de0005335c3af9b14f3d6652de3e6a6da3eed0d5604
+        stop_reason: tool_use
+        tools_called: ['skills']
+        input_tokens: 6790
+        output_tokens: 71
+   [ 10] tool_call        git:9ccb686a  c26c808e8da6
+        node: discover
+        tool: unknown
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 11] model_call       git:9ccb686a  2b2fd7cc0f69
+        node: discover
+        agent: scout
+        call: 5
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 21b98392f31d7df635e27d882137db5c6588f98130af59baae62938c008348ec
+        system_hash: b11b6c5d018f8b6e44fed74e7b32b2ec0f61d8b6cd97178fb16d85f7a7adce9d
+        response_hash: c1e547c8e67df4baeb377cc6293785b8924ea654a2143f6312c0584284d5e4ce
+        stop_reason: end_turn
+        tools_called: []
+        input_tokens: 7040
+        output_tokens: 847
+   [ 12] verdict          git:9ccb686a  4529d7466f33
+        node: discover
+        state: complete
+        eval_score: 0.[REDACTED_CC]
+   [ 13] node_attempt     git:9ccb686a  9f3e444bc791
+        node: implement
+        state: running
+   [ 14] model_call       git:9ccb686a  313ea030f44f
+        node: implement
+        agent: builder
+        call: 1
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: a7c5d3bfb2fcf57a35ec37a8a4998803711fb3ed9d60a7a439ed5b4b625965bd
+        system_hash: b17b41d12a6855c13ebb34a0bfaf4f488e68fd8f8a3af36498cb2980b134d38b
+        response_hash: 0133edf19bdb12e6c9cb8710b31258d702204883c09c8e790f69804f7da77db2
+        stop_reason: tool_use
+        tools_called: ['read_file']
+        input_tokens: 5822
+        output_tokens: 98
+   [ 15] model_call       git:9ccb686a  14fb36f3fcc2
+        node: implement
+        agent: builder
+        call: 2
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 934cd6a9a24558756c08fed5a30097c725a61c97581de37f29c3c6fb0f93d791
+        system_hash: f6d8a3b787f4bb67d1dcb5b74da2c43acc15450fc8ebeadea02c9d260b012604
+        response_hash: 5027e2e9f2f65524ca3ba8fffe80ce55aed3d561727d6e91e6402d0243b47ac9
+        stop_reason: tool_use
+        tools_called: ['_LLMSteering']
+        input_tokens: 1547
+        output_tokens: 352
+   [ 16] tool_call        git:9ccb686a  d8cef6e2c6cd
+        node: implement
+        tool: read_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 17] model_call       git:9ccb686a  f604440cc98e
+        node: implement
+        agent: builder
+        call: 3
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: b77d635f33a2a3ecb1fb0d1fd194964c209ad8e0a06699146cfbee7885b3a268
+        system_hash: b17b41d12a6855c13ebb34a0bfaf4f488e68fd8f8a3af36498cb2980b134d38b
+        response_hash: f9dd1cbb662ca10d51ae40e6247956501833bed2e42793cc21dfeb561e61b02e
+        stop_reason: tool_use
+        tools_called: ['read_file']
+        input_tokens: 7200
+        output_tokens: 75
+   [ 18] model_call       git:9ccb686a  10d7e49bc6ef
+        node: implement
+        agent: builder
+        call: 4
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: e6cf0248708cc50ff205d04517777e9c357b4c77e3add0bbdd408b746c714e4c
+        system_hash: f6d8a3b787f4bb67d1dcb5b74da2c43acc15450fc8ebeadea02c9d260b012604
+        response_hash: f41c4f11c61ba99abb7b1390963e5af36ac530b49b31e57a0405f8a9ff0bd903
+        stop_reason: tool_use
+        tools_called: ['_LLMSteering']
+        input_tokens: 3133
+        output_tokens: 513
+   [ 19] tool_call        git:9ccb686a  621a0e3f4bf9
+        node: implement
+        tool: read_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 20] model_call       git:9ccb686a  4207e4fa709a
+        node: implement
+        agent: builder
+        call: 5
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: c5c3280ad0d1b4c478d977c07bd546c98aba98543b74bd0a969851c7d93cfeb1
+        system_hash: b17b41d12a6855c13ebb34a0bfaf4f488e68fd8f8a3af36498cb2980b134d38b
+        response_hash: c560489ad81019174d8b4fc82189be03bc19746f08990737d722da146ee7a5fd
+        stop_reason: tool_use
+        tools_called: ['write_file']
+        input_tokens: 7441
+        output_tokens: 1469
+   [ 21] model_call       git:9ccb686a  83cb31851ccf
+        node: implement
+        agent: builder
+        call: 6
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 2486061781e3d2d349a5c6612c31af68a9280ad2e26a44459eb96e7f6ae9c5be
+        system_hash: f6d8a3b787f4bb67d1dcb5b74da2c43acc15450fc8ebeadea02c9d260b012604
+        response_hash: 14f29dd0ec8939066e475c00af1b4e66d8e7655b7ecc4e804583e8389e4c0eee
+        stop_reason: tool_use
+        tools_called: ['_LLMSteering']
+        input_tokens: 6420
+        output_tokens: 587
+   [ 22] tool_call        git:9ccb686a  1de2514e5070
+        node: implement
+        tool: write_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 23] model_call       git:9ccb686a  b05ed22f9459
+        node: implement
+        agent: builder
+        call: 7
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 2f51037e2c880e7601b5908253a4bd07e770d48842f57ef10a137dfff94f652f
+        system_hash: b17b41d12a6855c13ebb34a0bfaf4f488e68fd8f8a3af36498cb2980b134d38b
+        response_hash: 053ffa3c11ec1218105610348f05ab2fe8d36a386d7a51c9d7e45d591d072058
+        stop_reason: end_turn
+        tools_called: []
+        input_tokens: 8931
+        output_tokens: 330
+   [ 24] verdict          git:9c9c7be6  3b4d2a3bcbcf
+        node: implement
+        state: complete
+        eval_score: 0.8
+   [ 25] node_attempt     git:9c9c7be6  8d174bc23dfd
+        node: verify
+        state: running
+   [ 26] model_call       git:9c9c7be6  41ce8ab2bb61
+        node: verify
+        agent: verifier
+        call: 1
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 2657c358ccfc50089881a8e8d8ad237ec7c656c4b941a4d3694895e577131196
+        system_hash: c3ae0e5f5b399c7966938e587b4539e6290bd5792baf4215261ce6141a376537
+        response_hash: fb842f1dd5d660df791fca220861ddea430a16e4087e41d60317366a72586706
+        stop_reason: tool_use
+        tools_called: ['read_file', 'read_file']
+        input_tokens: 2628
+        output_tokens: 120
+   [ 27] tool_call        git:9c9c7be6  d39cf6aed506
+        node: verify
+        tool: read_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 28] tool_call        git:9c9c7be6  08c7e78a56a7
+        node: verify
+        tool: read_file
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 29] model_call       git:9c9c7be6  89548c663023
+        node: verify
+        agent: verifier
+        call: 2
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 95d83d3705e38f84b02590059efed3bf159e162e1ec676aed1fd958a266cca6d
+        system_hash: c3ae0e5f5b399c7966938e587b4539e6290bd5792baf4215261ce6141a376537
+        response_hash: c312053af391ef7bf24be71cb51fff5c86390e45201744f538ee14e08d758672
+        stop_reason: tool_use
+        tools_called: ['skills']
+        input_tokens: 4275
+        output_tokens: 72
+   [ 30] tool_call        git:9c9c7be6  c1dd9e1fbfa0
+        node: verify
+        tool: unknown
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 31] model_call       git:9c9c7be6  b160a84e7262
+        node: verify
+        agent: verifier
+        call: 3
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: a5948937578727c82bdda492568f578cf558b06ded1c8df1bba3ae7a30bf3950
+        system_hash: c3ae0e5f5b399c7966938e587b4539e6290bd5792baf4215261ce6141a376537
+        response_hash: 1d88a3bc5abe9f9e5a9465264094e2673fa1698cfe080214054a46a56bf50007
+        stop_reason: end_turn
+        tools_called: []
+        input_tokens: 4501
+        output_tokens: 498
+   [ 32] verdict          git:9c9c7be6  a5ed75cf17e7
+        node: verify
+        state: complete
+        eval_score: 0.[REDACTED_CC]
+   [ 33] node_attempt     git:9c9c7be6  a3739077071a
+        node: learn
+        state: running
+   [ 34] model_call       git:9c9c7be6  14fe4d720045
+        node: learn
+        agent: drafter
+        call: 1
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: ea825acd42438c76649059b10dc102713d0db5b31168d45ca6d1959d45cdbeab
+        system_hash: d8a611d57bf8feb6f82a1a580568232c57f71e8aed77f1fd52f0be8ddc9f9fad
+        response_hash: aa7e0e0421267a40a8b96ced4b3de5d16faeb0e962bb2d3bdac6a7fae0785b1c
+        stop_reason: tool_use
+        tools_called: ['recall_lessons', 'skills']
+        input_tokens: 5589
+        output_tokens: 123
+   [ 35] tool_call        git:9c9c7be6  573e654a7d56
+        node: learn
+        tool: unknown
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 36] tool_call        git:9c9c7be6  f989d9facd51
+        node: learn
+        tool: recall_lessons
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 37] model_call       git:9c9c7be6  3cca22a6c8f9
+        node: learn
+        agent: drafter
+        call: 2
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 5c81521cfc98ab213d42d230970c5d572d20e731f2b11234393adecc185a276d
+        system_hash: d8a611d57bf8feb6f82a1a580568232c57f71e8aed77f1fd52f0be8ddc9f9fad
+        response_hash: f6fede1daf044b7552770b893041a50fcf9aa5b6ae48d24c5a725e8ccb25b357
+        stop_reason: tool_use
+        tools_called: ['retrieve_offloaded_content']
+        input_tokens: 6742
+        output_tokens: 96
+   [ 38] tool_call        git:9c9c7be6  c6e5f672b4da
+        node: learn
+        tool: unknown
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 39] model_call       git:9c9c7be6  30743f7fb68e
+        node: learn
+        agent: drafter
+        call: 3
+        kind: stream
+        model_id: us.anthropic.claude-haiku-4-5-20251001-v1:0
+        request_hash: 486cc7474354c916d1d2fd452f9686e4e72debda974eb71b3860589d2e27ccd3
+        system_hash: d8a611d57bf8feb6f82a1a580568232c57f71e8aed77f1fd52f0be8ddc9f9fad
+        response_hash: 5be9d261779f416dd16ff0b1a2a523a200e2aed2b6d7d8dd00501585ee7e793d
+        stop_reason: tool_use
+        tools_called: ['LessonDraft']
+        input_tokens: 8993
+        output_tokens: 457
+   [ 40] tool_call        git:9c9c7be6  5eee4313c686
+        node: learn
+        tool: unknown
+        completed: True
+        cancelled: False
+        error_category: none
+   [ 41] verdict          git:9c9c7be6  263133421f71
+        node: learn
+        state: complete
+        eval_score: 0.75
+   [ 42] acceptance_gate  git:9c9c7be6  b44c7e01351b
+        command: pytest tests/test_new_feature.py
+        exit_code: 0
+        passed: True
+   [ 43] lesson_write     git:b80c021a  51ef9a862073
+        ticket_id: feature-1-acceptance-test
+        outcome: success
+   [ 44] run_end          git:b80c021a  e696b784655d
+        outcome: success
+        branch: autodev/run-cef093835d2c
+        learned: True
+
+chain:      VERIFIED
+provenance: may teach memory
+            chain verified across 45 blocks; no breaker trip

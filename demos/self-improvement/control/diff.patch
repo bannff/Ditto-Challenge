@@ -1,0 +1,28 @@
+diff --git a/service.py b/service.py
+index 0caa9d6..81e1f7c 100644
+--- a/service.py
++++ b/service.py
+@@ -21,8 +21,10 @@ class OrderService:
+         return self._store.create_order(owner_id=user.id, item=item, quantity=quantity)
+ 
+     def get_order(self, token: str | None, order_id: str) -> Order:
+-        current_user(self._store, self._sessions, token)
+-        return self._store.get_order(order_id)
++        user = current_user(self._store, self._sessions, token)
++        order = self._store.get_order(order_id)
++        require_owner(user, order)
++        return order
+ 
+     def list_my_orders(self, token: str | None) -> list[Order]:
+         user = current_user(self._store, self._sessions, token)
+@@ -30,8 +32,9 @@ class OrderService:
+ 
+     def order_summary(self, token: str | None, order_id: str) -> dict:
+         """A compact view of one order, used by the receipt/summary screen."""
+-        current_user(self._store, self._sessions, token)
++        user = current_user(self._store, self._sessions, token)
+         order = self._store.get_order(order_id)
++        require_owner(user, order)
+         return {"id": order.id, "item": order.item, "status": order.status}
+ 
+     def cancel_order(self, token: str | None, order_id: str) -> Order:

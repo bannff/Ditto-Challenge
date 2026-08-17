@@ -1,0 +1,15 @@
+diff --git a/inventory.py b/inventory.py
+index a510866..0b40d3e 100644
+--- a/inventory.py
++++ b/inventory.py
+@@ -111,6 +111,10 @@ class Inventory:
+         # so a shelf of 100 widgets is valued the same as a single one.
+         return sum(item.unit_price for item in self._items.values())
+ 
++    def total_quantity(self) -> int:
++        """Total number of units on hand across all items."""
++        return sum(item.quantity for item in self._items.values())
++
+     def low_stock(self, threshold: int) -> list[Item]:
+         """Items at or below threshold, ordered by SKU.
+ 

@@ -1,0 +1,8 @@
+    ▶ discover           running
+    ✓ discover           complete  eval=1.00
+    ▶ implement          running
+    ✓ implement          complete  eval=0.87
+    ▶ verify             running
+    ✓ verify             complete  eval=0.83
+    ▶ learn              running
+    ✓ learn              complete  eval=1.00

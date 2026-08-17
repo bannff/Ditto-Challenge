@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "run_id": "run-e189899f9eed",
+  "expected_outcome": "refused",
+  "artifacts": {
+    "trace.log": {
+      "sha256": "01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b",
+      "bytes": 1
+    },
+    "report.json": {
+      "sha256": "dfe6959ab45c1bbae58265fb2b555bca2ad22f70972d8acfffdb7548f7dfd463",
+      "bytes": 893
+    },
+    "diff.patch": {
+      "sha256": "ee336fde898ba8c95063de7cb30b564a387ae301fa98049bf9463d2396f29425",
+      "bytes": 124
+    },
+    "chain.json": {
+      "sha256": "a52511973354a6fc7db73577274e233cefbb1353445164df49dfc44d338166a2",
+      "bytes": 1269
+    },
+    "chain.log": {
+      "sha256": "178afe8111d093a133e52ae63d8c00ed091bee14570692b02b7035f7c9c037a5",
+      "bytes": 477
+    }
+  }
+}

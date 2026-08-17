@@ -1,0 +1,731 @@
+{
+  "schema_version": 1,
+  "run_id": "run-10e139035e40",
+  "blocks": [
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 0,
+      "block_type": "run_start",
+      "payload": {
+        "ticket_id": "bug-1-failing-test",
+        "domain": "bugfix",
+        "replaying": false
+      },
+      "git_hash": null,
+      "prev_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "content_hash": "60aa0be3b2fec1b373a39957b5018317f3404af16b32ba37303d7052d3d1e6ba",
+      "created_at": "2026-08-17T03:43:18.367431Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 1,
+      "block_type": "node_attempt",
+      "payload": {
+        "node": "discover",
+        "state": "running",
+        "eval_score": null
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "60aa0be3b2fec1b373a39957b5018317f3404af16b32ba37303d7052d3d1e6ba",
+      "content_hash": "cc3125c9b3141f827376ca20ff88a09391f79a0c86aaf4adca451b70148f68ec",
+      "created_at": "2026-08-17T03:43:19.584652Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 2,
+      "block_type": "model_call",
+      "payload": {
+        "node": "discover",
+        "agent": "scout",
+        "call": 1,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "68d66393a82d85629d6d978f89550a6442273a598573957780b927819cdbabd0",
+        "system_hash": "d87f733a81cf1ba76f75b64e7d7fd514cc63c776cb5a565438de8d80d3efbed8",
+        "response_hash": "cd74f2d5bef0bc83f91c980bf5a684d4f7b48b95d7fdca6a96ddcf3050e554fe",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "list_files"
+        ],
+        "input_tokens": 4838,
+        "output_tokens": 77
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "cc3125c9b3141f827376ca20ff88a09391f79a0c86aaf4adca451b70148f68ec",
+      "content_hash": "b07c07b38f74f0586914ced30ae897ba827c3b61d493d3aace04c979b497174b",
+      "created_at": "2026-08-17T03:43:20.877985Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 3,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "discover",
+        "tool": "list_files",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "b07c07b38f74f0586914ced30ae897ba827c3b61d493d3aace04c979b497174b",
+      "content_hash": "cf0ba3bc93ea1a5d7c6ccead5a77804a331e4f1b51c3377245a35eb486c6614a",
+      "created_at": "2026-08-17T03:43:20.882764Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 4,
+      "block_type": "model_call",
+      "payload": {
+        "node": "discover",
+        "agent": "scout",
+        "call": 2,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "b628475d730e037c3f52305fd3e658f6ab9494ea2c9fbe310d0976b1eba169dc",
+        "system_hash": "d87f733a81cf1ba76f75b64e7d7fd514cc63c776cb5a565438de8d80d3efbed8",
+        "response_hash": "daf4c76a33adf433a87339e4efe815de668203a024e6ea68fdfee035ab2085d7",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "read_file",
+          "read_file"
+        ],
+        "input_tokens": 4953,
+        "output_tokens": 118
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "cf0ba3bc93ea1a5d7c6ccead5a77804a331e4f1b51c3377245a35eb486c6614a",
+      "content_hash": "f5290bb119a257c43f930c0593d8865f89dfbf43def92a5e27db75d3692f6e9a",
+      "created_at": "2026-08-17T03:43:22.982709Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 5,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "discover",
+        "tool": "read_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "f5290bb119a257c43f930c0593d8865f89dfbf43def92a5e27db75d3692f6e9a",
+      "content_hash": "9b2ee9de998f82f8c09dc63dc9d8e285bb4fe12264f32143057c1ad43f83c662",
+      "created_at": "2026-08-17T03:43:22.988781Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 6,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "discover",
+        "tool": "read_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "9b2ee9de998f82f8c09dc63dc9d8e285bb4fe12264f32143057c1ad43f83c662",
+      "content_hash": "393a683c6fc633e00f92ede254f9f542d8a0005ee37ab3f1fda7f42b41e407b6",
+      "created_at": "2026-08-17T03:43:22.992523Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 7,
+      "block_type": "model_call",
+      "payload": {
+        "node": "discover",
+        "agent": "scout",
+        "call": 3,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "e4c872ee9b769e3898bf95df289738afae9ccff8784a1ed43f33f7589c09355e",
+        "system_hash": "d87f733a81cf1ba76f75b64e7d7fd514cc63c776cb5a565438de8d80d3efbed8",
+        "response_hash": "d2670543205c794b7465e3b46fd4127c1b65d1b54b7ea67b159d091e65886ceb",
+        "stop_reason": "end_turn",
+        "tools_called": [],
+        "input_tokens": 6570,
+        "output_tokens": 509
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "393a683c6fc633e00f92ede254f9f542d8a0005ee37ab3f1fda7f42b41e407b6",
+      "content_hash": "4abbae9099b47805939764e6565f97fc3d2412504a457c48943b525f15487946",
+      "created_at": "2026-08-17T03:43:28.180412Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 8,
+      "block_type": "verdict",
+      "payload": {
+        "node": "discover",
+        "state": "complete",
+        "eval_score": 1.0
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "4abbae9099b47805939764e6565f97fc3d2412504a457c48943b525f15487946",
+      "content_hash": "2a41654b624f21a9fe49230fa7494534aca993600b869c57cba460926c2007f9",
+      "created_at": "2026-08-17T03:43:44.912016Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 9,
+      "block_type": "node_attempt",
+      "payload": {
+        "node": "implement",
+        "state": "running",
+        "eval_score": null
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "2a41654b624f21a9fe49230fa7494534aca993600b869c57cba460926c2007f9",
+      "content_hash": "708d8d7ff8dc0d0f0544605e1e58b2ce5d356b46f08e6b1319d12d3e9e1e4461",
+      "created_at": "2026-08-17T03:43:44.915919Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 10,
+      "block_type": "model_call",
+      "payload": {
+        "node": "implement",
+        "agent": "builder",
+        "call": 1,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "77e9bd0c44489a88168ac3f225b30982481484abe5e3a89756ef0a04e52b99a0",
+        "system_hash": "643edd3c13f32051db30150cfd883cae024a5f7fb609aedbab8c44a2b047e72a",
+        "response_hash": "ed709a1841031d2b6e058496fed7d7af2ae9574c2770fe13ffaf2bf9d324adae",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "read_file",
+          "read_file"
+        ],
+        "input_tokens": 5370,
+        "output_tokens": 147
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "708d8d7ff8dc0d0f0544605e1e58b2ce5d356b46f08e6b1319d12d3e9e1e4461",
+      "content_hash": "ff9027fe12ef4a7bfb75f36a624aaff5d01c29f22da3b94a6f740fb51dcf94ea",
+      "created_at": "2026-08-17T03:43:46.304217Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 11,
+      "block_type": "model_call",
+      "payload": {
+        "node": "implement",
+        "agent": "builder",
+        "call": 2,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "6111e0e967b870750a93939e54ea402be6644529f9b81642fce35a72b5c5c683",
+        "system_hash": "f6d8a3b787f4bb67d1dcb5b74da2c43acc15450fc8ebeadea02c9d260b012604",
+        "response_hash": "eb578716b4ab0a5c268d68b6c17aa64b00571663d5e0392d3a5100ea795f428f",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "_LLMSteering"
+        ],
+        "input_tokens": 1546,
+        "output_tokens": 319
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "ff9027fe12ef4a7bfb75f36a624aaff5d01c29f22da3b94a6f740fb51dcf94ea",
+      "content_hash": "25abf4ff4d2002dfc1bac9d9e23a5fcb663231bd077aaa084714021a8117f648",
+      "created_at": "2026-08-17T03:43:49.521432Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 12,
+      "block_type": "model_call",
+      "payload": {
+        "node": "implement",
+        "agent": "builder",
+        "call": 3,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "23ae998cd5714c5bf7e7782b3cee6be7184ef937004326a3962cdd80694aa5d4",
+        "system_hash": "f6d8a3b787f4bb67d1dcb5b74da2c43acc15450fc8ebeadea02c9d260b012604",
+        "response_hash": "91ab345572b873a353026755b805bf7dfb6b43c35639f4a37c196603c6cb69e3",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "_LLMSteering"
+        ],
+        "input_tokens": 1662,
+        "output_tokens": 469
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "25abf4ff4d2002dfc1bac9d9e23a5fcb663231bd077aaa084714021a8117f648",
+      "content_hash": "c0ccbf83f806f3ba04d6ff54b0d0b91bd0597ff0a569fd4ae6319e3433a27147",
+      "created_at": "2026-08-17T03:43:53.848341Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 13,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "implement",
+        "tool": "read_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "c0ccbf83f806f3ba04d6ff54b0d0b91bd0597ff0a569fd4ae6319e3433a27147",
+      "content_hash": "ed87a1f726c9fa145b18b15016833f729fd7adbeb62745e19211e2bb8a0a8f7e",
+      "created_at": "2026-08-17T03:43:53.854733Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 14,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "implement",
+        "tool": "read_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "ed87a1f726c9fa145b18b15016833f729fd7adbeb62745e19211e2bb8a0a8f7e",
+      "content_hash": "1ed299464a987e0913c0184b0d618f9cd21d6d572c46dbc46ae35fad0b379d55",
+      "created_at": "2026-08-17T03:43:53.858939Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 15,
+      "block_type": "model_call",
+      "payload": {
+        "node": "implement",
+        "agent": "builder",
+        "call": 4,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "973ce3d7df1625c9a0000e2b977ea6abc0041ab9e4ba05c75182473afe897d6a",
+        "system_hash": "643edd3c13f32051db30150cfd883cae024a5f7fb609aedbab8c44a2b047e72a",
+        "response_hash": "f672bf394a05500fd3bb7b1d84ecec76120cd6c1111664234629538773ee70b7",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "write_file"
+        ],
+        "input_tokens": 7016,
+        "output_tokens": 1332
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "1ed299464a987e0913c0184b0d618f9cd21d6d572c46dbc46ae35fad0b379d55",
+      "content_hash": "60524057500bfc9acd23c6e039dd44cf23f5293a9ff445fb14035396eaf3286c",
+      "created_at": "2026-08-17T03:44:01.968493Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 16,
+      "block_type": "model_call",
+      "payload": {
+        "node": "implement",
+        "agent": "builder",
+        "call": 5,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "af4236fc43dd4c2cf0ebb143bf2eade138d9bdb729a3422547e7988689495830",
+        "system_hash": "f6d8a3b787f4bb67d1dcb5b74da2c43acc15450fc8ebeadea02c9d260b012604",
+        "response_hash": "6aab13a4bcc1bc9a0a6158639b718b098fd08fc59adcc57809a3c50ce37a1499",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "_LLMSteering"
+        ],
+        "input_tokens": 6176,
+        "output_tokens": 666
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "60524057500bfc9acd23c6e039dd44cf23f5293a9ff445fb14035396eaf3286c",
+      "content_hash": "3ffb9f7fcdf3b29631aae70f0c20aceac72fd65ee663ea4838c6d5e84f511ed0",
+      "created_at": "2026-08-17T03:44:08.884013Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 17,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "implement",
+        "tool": "write_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "3ffb9f7fcdf3b29631aae70f0c20aceac72fd65ee663ea4838c6d5e84f511ed0",
+      "content_hash": "edb494078588b184256064e5da6906b62738403f355a1f413b09fb14399b1e0f",
+      "created_at": "2026-08-17T03:44:08.890146Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 18,
+      "block_type": "model_call",
+      "payload": {
+        "node": "implement",
+        "agent": "builder",
+        "call": 6,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "f2a86e2c12490bd25a23b2e7ec81c6bee91c2b256ff90e018984704180f41dbb",
+        "system_hash": "643edd3c13f32051db30150cfd883cae024a5f7fb609aedbab8c44a2b047e72a",
+        "response_hash": "91c7eeab143728ceb58ad62cadaa6df44bdae14762f4a4a03a5fe57788f0a25f",
+        "stop_reason": "end_turn",
+        "tools_called": [],
+        "input_tokens": 8369,
+        "output_tokens": 362
+      },
+      "git_hash": "6b2f63e3ee1de54b1cadb94cb20a01b13556a3bf",
+      "prev_hash": "edb494078588b184256064e5da6906b62738403f355a1f413b09fb14399b1e0f",
+      "content_hash": "12d683d13905b140ee7175424f1d5fbde81c252971b7e474cd0e5a531410d82c",
+      "created_at": "2026-08-17T03:44:12.575664Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 19,
+      "block_type": "verdict",
+      "payload": {
+        "node": "implement",
+        "state": "complete",
+        "eval_score": 0.8666666666666666
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "12d683d13905b140ee7175424f1d5fbde81c252971b7e474cd0e5a531410d82c",
+      "content_hash": "0918530a66c0860c7edd7c490b3d91b926ca2302c7324721f84394b5b22cfd95",
+      "created_at": "2026-08-17T03:44:32.745784Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 20,
+      "block_type": "node_attempt",
+      "payload": {
+        "node": "verify",
+        "state": "running",
+        "eval_score": null
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "0918530a66c0860c7edd7c490b3d91b926ca2302c7324721f84394b5b22cfd95",
+      "content_hash": "05204ebbf53d19a087f232f35c4d479279b777bbdbe2c109812a501cad2c1ea8",
+      "created_at": "2026-08-17T03:44:32.749538Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 21,
+      "block_type": "model_call",
+      "payload": {
+        "node": "verify",
+        "agent": "verifier",
+        "call": 1,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "706979d1234758edf3c4872f9e7096d0f50bcef23c874ce180982bae3f493aa9",
+        "system_hash": "c3ae0e5f5b399c7966938e587b4539e6290bd5792baf4215261ce6141a376537",
+        "response_hash": "6c9bf6d29f63bfd6540838f75861a3da1987190a80ebfec9fd94c9109ce12dfa",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "skills",
+          "read_file",
+          "read_file"
+        ],
+        "input_tokens": 2680,
+        "output_tokens": 172
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "05204ebbf53d19a087f232f35c4d479279b777bbdbe2c109812a501cad2c1ea8",
+      "content_hash": "a93c2e9cb9d194de5891c54661f58d41161cd75e3cf9db54ec0cc2c7e8901f1d",
+      "created_at": "2026-08-17T03:44:34.391522Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 22,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "verify",
+        "tool": "unknown",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "a93c2e9cb9d194de5891c54661f58d41161cd75e3cf9db54ec0cc2c7e8901f1d",
+      "content_hash": "d327c41f94987a708cc93de3efc089b52bf1585a6f5e08936647edfdd714ad5d",
+      "created_at": "2026-08-17T03:44:34.394575Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 23,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "verify",
+        "tool": "read_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "d327c41f94987a708cc93de3efc089b52bf1585a6f5e08936647edfdd714ad5d",
+      "content_hash": "36adcf3170366ae55d7f23228af1b9ded023ce716ec5e2d7018cb8e9dadf1be4",
+      "created_at": "2026-08-17T03:44:34.398526Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 24,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "verify",
+        "tool": "read_file",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "36adcf3170366ae55d7f23228af1b9ded023ce716ec5e2d7018cb8e9dadf1be4",
+      "content_hash": "6a428ea34439f3a7a3a51c4937eb12ac4cd32cecda3d8f3a3aecd9a3e74acd1e",
+      "created_at": "2026-08-17T03:44:34.401261Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 25,
+      "block_type": "model_call",
+      "payload": {
+        "node": "verify",
+        "agent": "verifier",
+        "call": 2,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "717d8ac3fb908721433a3d4340ec1a2e9bfc695313d5aad9eb5c109258d2e780",
+        "system_hash": "c3ae0e5f5b399c7966938e587b4539e6290bd5792baf4215261ce6141a376537",
+        "response_hash": "5e45030f3174988129639336adffbb6772aaad1ed2a70633803bfcdd1238a888",
+        "stop_reason": "end_turn",
+        "tools_called": [],
+        "input_tokens": 4439,
+        "output_tokens": 564
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "6a428ea34439f3a7a3a51c4937eb12ac4cd32cecda3d8f3a3aecd9a3e74acd1e",
+      "content_hash": "7378a1934ac5019539c053a5241f12698441ca8171b33ae451366df3e08bc113",
+      "created_at": "2026-08-17T03:44:39.754078Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 26,
+      "block_type": "verdict",
+      "payload": {
+        "node": "verify",
+        "state": "complete",
+        "eval_score": 0.8333333333333334
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "7378a1934ac5019539c053a5241f12698441ca8171b33ae451366df3e08bc113",
+      "content_hash": "c7c66b04033c25780c9b2d1f2a122a71f4eec73f586626da7ed74fc46eb5a8c2",
+      "created_at": "2026-08-17T03:44:51.890193Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 27,
+      "block_type": "node_attempt",
+      "payload": {
+        "node": "learn",
+        "state": "running",
+        "eval_score": null
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "c7c66b04033c25780c9b2d1f2a122a71f4eec73f586626da7ed74fc46eb5a8c2",
+      "content_hash": "34196c59e6694b467f4c6b4f72659ef87ce34dd18ebabffecf52883df47250bc",
+      "created_at": "2026-08-17T03:44:51.894406Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 28,
+      "block_type": "model_call",
+      "payload": {
+        "node": "learn",
+        "agent": "drafter",
+        "call": 1,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "8a941e9dabfd7b6d94259e5f64e2624f639a973c8ce13ded2b201686dc170480",
+        "system_hash": "d8a611d57bf8feb6f82a1a580568232c57f71e8aed77f1fd52f0be8ddc9f9fad",
+        "response_hash": "43307487e41beafaba788e6ff4e6352f0fb36ffa4c2d32121be0f36c26d7b497",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "recall_lessons",
+          "skills"
+        ],
+        "input_tokens": 5404,
+        "output_tokens": 128
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "34196c59e6694b467f4c6b4f72659ef87ce34dd18ebabffecf52883df47250bc",
+      "content_hash": "8244317572a8bd6bb9681a3f49769b6fb6e7fb026fb815891e5468e44aa290db",
+      "created_at": "2026-08-17T03:44:53.565952Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 29,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "learn",
+        "tool": "unknown",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "8244317572a8bd6bb9681a3f49769b6fb6e7fb026fb815891e5468e44aa290db",
+      "content_hash": "84b4c8c3f58c0f899454645ed9597cd163840da4ee4ef37d7cdbb47e045d6d1f",
+      "created_at": "2026-08-17T03:44:53.570892Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 30,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "learn",
+        "tool": "recall_lessons",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "84b4c8c3f58c0f899454645ed9597cd163840da4ee4ef37d7cdbb47e045d6d1f",
+      "content_hash": "3fd62b7926460344b4cce25324f15134bae8c704ddd01b307189412e14fcb50c",
+      "created_at": "2026-08-17T03:44:53.732210Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 31,
+      "block_type": "model_call",
+      "payload": {
+        "node": "learn",
+        "agent": "drafter",
+        "call": 2,
+        "kind": "stream",
+        "model_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "request_hash": "43c4ed441c736506132ffa27ffd83886b379a1b862751522b9e0c3a7c9bc734f",
+        "system_hash": "d8a611d57bf8feb6f82a1a580568232c57f71e8aed77f1fd52f0be8ddc9f9fad",
+        "response_hash": "f233ff78b4464743303e10d92249a50b782eb9e2a8dd8e6460220b328c57d0f3",
+        "stop_reason": "tool_use",
+        "tools_called": [
+          "LessonDraft"
+        ],
+        "input_tokens": 6674,
+        "output_tokens": 299
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "3fd62b7926460344b4cce25324f15134bae8c704ddd01b307189412e14fcb50c",
+      "content_hash": "0e2a2c481106167b4ce034baa3790f9e049806a542b9dc40214f090ca5165a82",
+      "created_at": "2026-08-17T03:44:57.609988Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 32,
+      "block_type": "tool_call",
+      "payload": {
+        "node": "learn",
+        "tool": "unknown",
+        "completed": true,
+        "cancelled": false,
+        "error_category": "none"
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "0e2a2c481106167b4ce034baa3790f9e049806a542b9dc40214f090ca5165a82",
+      "content_hash": "4c1b6ceae62c2f261271ff0b426e240040aa29dc417c2337401026f1fdf2f11f",
+      "created_at": "2026-08-17T03:44:57.613498Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 33,
+      "block_type": "verdict",
+      "payload": {
+        "node": "learn",
+        "state": "complete",
+        "eval_score": 1.0
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "4c1b6ceae62c2f261271ff0b426e240040aa29dc417c2337401026f1fdf2f11f",
+      "content_hash": "6fb6db3e0d9f54db53fe6eba53965437e530f979706c45c1aadc864f9451495e",
+      "created_at": "2026-08-17T03:45:04.263947Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 34,
+      "block_type": "acceptance_gate",
+      "payload": {
+        "command": "pytest tests/test_bug_repro.py",
+        "exit_code": 0,
+        "passed": true,
+        "refused": null
+      },
+      "git_hash": "d54c74b7494bbfb9ddbf6dcb871afca8f597a529",
+      "prev_hash": "6fb6db3e0d9f54db53fe6eba53965437e530f979706c45c1aadc864f9451495e",
+      "content_hash": "d5d19fd1622a3d770b8019e7e6adc6107353e7d2a11c204b03fa8f7efde85863",
+      "created_at": "2026-08-17T03:45:04.776082Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 35,
+      "block_type": "lesson_write",
+      "payload": {
+        "ticket_id": "bug-1-failing-test",
+        "outcome": "success"
+      },
+      "git_hash": "3f7ae8c958fb35d3d8ea717eca2e7f2d46d00c80",
+      "prev_hash": "d5d19fd1622a3d770b8019e7e6adc6107353e7d2a11c204b03fa8f7efde85863",
+      "content_hash": "d431f6571c777eaaacec121b0d857ab57876e109f5d74e24406fe39c3f63756d",
+      "created_at": "2026-08-17T03:45:05.661893Z"
+    },
+    {
+      "schema_version": 1,
+      "run_id": "run-10e139035e40",
+      "seq": 36,
+      "block_type": "run_end",
+      "payload": {
+        "outcome": "success",
+        "branch": "autodev/run-10e139035e40",
+        "learned": true
+      },
+      "git_hash": "3f7ae8c958fb35d3d8ea717eca2e7f2d46d00c80",
+      "prev_hash": "d431f6571c777eaaacec121b0d857ab57876e109f5d74e24406fe39c3f63756d",
+      "content_hash": "7687cd574912fb2cba604e52814a3e53e68389d537edafd6e4b19c92867d33eb",
+      "created_at": "2026-08-17T03:45:05.676671Z"
+    }
+  ],
+  "head": {
+    "length": 37,
+    "head_hash": "7687cd574912fb2cba604e52814a3e53e68389d537edafd6e4b19c92867d33eb"
+  }
+}

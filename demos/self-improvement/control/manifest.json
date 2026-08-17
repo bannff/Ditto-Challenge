@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "run_id": "run-6daef418cce9",
+  "expected_outcome": "success",
+  "artifacts": {
+    "trace.log": {
+      "sha256": "22f409e96882cb8ee01d7467f7b2e032e5f7d7a75b1e0f0c1202615571d844a5",
+      "bytes": 212
+    },
+    "report.json": {
+      "sha256": "56fbeb22097b3bffa699ec76a3f1783092c08eaf562f268f7f78297237dcfbfd",
+      "bytes": 12959
+    },
+    "diff.patch": {
+      "sha256": "374e34577f9c7c71d60033684c6c3216d11920f5864dd765e55a0b2c5332f30c",
+      "bytes": 1261
+    },
+    "chain.json": {
+      "sha256": "c0bd42fed01c732d8852e0334bef52a1b53c94021bcf3cf6e098d2ad8d3d0617",
+      "bytes": 45496
+    },
+    "chain.log": {
+      "sha256": "0e68691db4fc78c2c76db79922f7747ca14497f58641649b8e456c332b2ece48",
+      "bytes": 19239
+    }
+  }
+}

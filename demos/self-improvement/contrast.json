@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "scenario": "idor-1-broken-access",
+  "primed_rule": "Hard-won external policy (deliberately NOT written in the code): an authenticated cross-user order read denial must record exactly one scrubbed in-memory audit event. It has only event_type='authorization_denied', action='order.read', and outcome='denied'; it must not include a token, identifier, request data, exception text, or arbitrary metadata. Do not record successful reads, unauthenticated failures, or not-found orders. Put the recording at the service authorization boundary, not generic API exception handling.",
+  "runs": {
+    "control": "run-6daef418cce9",
+    "primed": "run-9817d394c8a9"
+  },
+  "acceptance": {
+    "control": true,
+    "primed": true
+  },
+  "check": {
+    "label": "fixed read-denial audit seam present?",
+    "control": false,
+    "primed": true
+  }
+}

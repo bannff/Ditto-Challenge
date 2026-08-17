@@ -1,0 +1,81 @@
+diff --git a/conftest.py b/conftest.py
+index ee34570..344fe8f 100644
+--- a/conftest.py
++++ b/conftest.py
+@@ -1,6 +1,7 @@
+ # Presence of this file puts target_app_2/ on sys.path so tests can import the modules.
+ import pytest
+ from api import Api
++from audit import InMemoryAuditLog
+ from auth import Sessions
+ from service import OrderService
+ from store import Store
+@@ -14,10 +15,11 @@ def app():
+     """
+     store = Store()
+     sessions = Sessions()
++    audit_log = InMemoryAuditLog()
+     store.add_user("alice", "Alice")
+     store.add_user("bob", "Bob")
+     store.add_user("admin", "Admin", role="admin")
+-    api = Api(OrderService(store, sessions))
++    api = Api(OrderService(store, sessions, audit_log))
+     tokens = {u: sessions.issue(u) for u in ("alice", "bob", "admin")}
+     order_id = api.handle(
+         "POST", "/orders", token=[REDACTED_SECRET]["alice"], body={"item": "widget", "quantity": 3}
+diff --git a/service.py b/service.py
+index 0caa9d6..ea87be7 100644
+--- a/service.py
++++ b/service.py
+@@ -7,22 +7,31 @@ mutates it. Object-level authorization (who may touch which order) is enforced h
+ 
+ from __future__ import annotations
+ 
+-from auth import Sessions, current_user, require_owner
++from auth import Sessions, current_user, require_owner, ForbiddenError
++from audit import AuditEvent, AuditSink
+ from store import Order, Store
+ 
+ 
+ class OrderService:
+-    def __init__(self, store: Store, sessions: Sessions) -> None:
++    def __init__(self, store: Store, sessions: Sessions, audit_sink: AuditSink | None = None) -> None:
+         self._store = store
+         self._sessions = sessions
++        self._audit_sink = audit_sink
+ 
+     def create_order(self, token: str | None, item: str, quantity: int) -> Order:
+         user = current_user(self._store, self._sessions, token)
+         return self._store.create_order(owner_id=user.id, item=item, quantity=quantity)
+ 
+     def get_order(self, token: str | None, order_id: str) -> Order:
+-        current_user(self._store, self._sessions, token)
+-        return self._store.get_order(order_id)
++        user = current_user(self._store, self._sessions, token)
++        order = self._store.get_order(order_id)
++        try:
++            require_owner(user, order)
++        except ForbiddenError:
++            if self._audit_sink:
++                self._audit_sink.record(AuditEvent())
++            raise
++        return order
+ 
+     def list_my_orders(self, token: str | None) -> list[Order]:
+         user = current_user(self._store, self._sessions, token)
+@@ -30,8 +39,14 @@ class OrderService:
+ 
+     def order_summary(self, token: str | None, order_id: str) -> dict:
+         """A compact view of one order, used by the receipt/summary screen."""
+-        current_user(self._store, self._sessions, token)
++        user = current_user(self._store, self._sessions, token)
+         order = self._store.get_order(order_id)
++        try:
++            require_owner(user, order)
++        except ForbiddenError:
++            if self._audit_sink:
++                self._audit_sink.record(AuditEvent())
++            raise
+         return {"id": order.id, "item": order.item, "status": order.status}
+ 
+     def cancel_order(self, token: str | None, order_id: str) -> Order:

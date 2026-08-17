@@ -1,0 +1,2 @@
+{"timestamp":1786938551.5980449,"run_id":"run-e189899f9eed","kind":"run","status":"started","node":null,"attempt":null,"category":null,"score":null,"threshold":null,"duration_ms":null,"chain_length":null,"chain_head":null,"outcome":null}
+{"timestamp":1786938551.6004422,"run_id":"run-e189899f9eed","kind":"terminal","status":"complete","node":null,"attempt":null,"category":null,"score":null,"threshold":null,"duration_ms":null,"chain_length":2,"chain_head":"719553afed6bc899dce98d3c157792258d73b57a7a66a8368ef2a48f116a5247","outcome":"refused"}
