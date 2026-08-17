@@ -132,7 +132,21 @@ def run_ticket(
         kb.seed()
     memory = memory or LessonMemory()
 
-    worktree = Worktree.create(ticket.repository, run_id, settings.worktrees_dir)
+    try:
+        worktree = Worktree.create(ticket.repository, run_id, settings.worktrees_dir)
+    except WorktreeError as e:
+        # The one failure that used to produce *no record at all*: this call sat outside the
+        # try below, so a bad repository path, a git error, or a worktrees base we refuse to
+        # use propagated as a traceback with no RunReport and no terminated chain. Every other
+        # failure here yields a structured outcome, and "the run vanished" is the least
+        # auditable result the system can give. REFUSED because nothing was verified, so
+        # nothing may ship — and the chain gets its RUN_END so it doesn't dangle.
+        recorder.append(BlockType.RUN_END, {"outcome": str(Outcome.REFUSED), "reason": str(e)})
+        report = RunReport(
+            run_id=run_id, ticket=ticket, outcome=Outcome.REFUSED, evidence=f"cannot start: {e}"
+        )
+        ledger.save(report)
+        return report
     Worktree.prune_checkpoints(Path(ticket.repository).resolve())
     keep_branch = False
     try:

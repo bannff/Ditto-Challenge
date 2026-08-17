@@ -34,6 +34,7 @@ from pydantic import ValidationError
 
 from self_improving_coding_agent import workflow
 from self_improving_coding_agent.contracts import (
+    BlockType,
     LessonDraft,
     Outcome,
     RunReport,
@@ -682,7 +683,17 @@ def test_a_bad_repository_path_fails_safely(repo: Path, tmp_path: Path, bad):
     base = get_settings().worktrees_dir
     base.mkdir(mode=0o700, parents=True, exist_ok=True)
     before = set(base.iterdir())
-    with _stubbed_graph(), pytest.raises(WorktreeError):
-        _invoke(ticket, Ledger(tmp_path / "ledger.db"))
+    ledger = Ledger(tmp_path / "ledger.db")
+    with _stubbed_graph():
+        report = _invoke(ticket, ledger)
+    # A structured outcome, not a traceback. This used to raise out of run_ticket, producing no
+    # report and no terminated chain — "the run vanished" being the least auditable result
+    # available, and the only failure mode here that didn't yield one.
+    assert report.outcome == Outcome.REFUSED
+    assert report.branch is None
+    assert "cannot start" in report.evidence
+    assert ledger.get(report.run_id) is not None
+    kinds = [b.block_type for b in ledger.blocks(report.run_id)]
+    assert BlockType.RUN_END in kinds, "the chain was left dangling"
     assert set(base.iterdir()) == before  # no partial worktree
     assert _autodev_branches(repo) == []
