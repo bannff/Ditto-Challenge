@@ -11,9 +11,38 @@ not touching the engine.
 `DESIGN.md` is the two-page architecture write-up, including what I deliberately cut and what
 is still broken.
 
+## Two commands
+
+```bash
+make setup     # install, and create .env from the example
+make demo      # the main demo: bug + feature + refusal on the harder target app
+```
+
+Fill in your Bedrock model IDs and AWS profile in `.env` between the two.
+
+`make demo` runs the *app2* suite because that target is hard enough that the swarm actually
+collaborates rather than one-shotting the fix. Everything else is one command, deliberately not
+chained — five back-to-back runs invites throttling, and each is more legible on its own:
+
+| Command | Shows | Bedrock |
+|---|---|---|
+| `make demo` | Bug resolved, feature resolved, ticket refused | yes |
+| `make demo-selfimprove` | The before/after: same scenario, empty vs primed memory | yes |
+| `make demo-app1` | The same three outcomes on the simpler app | yes |
+| `make demo-ledger` | Rollback, recovery, tamper-evidence | **no** |
+| `make test` | 692 tests, including the adversarial suite | **no** |
+| `make redteam` / `make chaos` | LLM attacker, and injected tool failures | yes |
+
+Every target is a one-line wrapper, so `uv run python scripts/demo.py --app app2` works just as
+well — but it has to be `uv run` (or an activated venv), not bare `python3`, since the
+dependencies live in the uv environment.
+
+Without AWS access the two keyless rows above still run, and the committed bundles under
+`demos/` are real recorded runs you can check with `scripts/verify_demo_artifacts.py`.
+
 ## What to evaluate
 
-Generate and inspect four outcomes:
+`make demo` generates and lets you inspect four outcomes:
 
 1. **Bug resolved** — a real patch, a retained branch, and a passed acceptance gate.
 2. **Feature resolved** — the same evidence for a feature request.
@@ -29,11 +58,7 @@ below, then verify the resulting bundle offline.
 - Python 3.12 and [uv](https://docs.astral.sh/uv/)
 - AWS credentials with access to Bedrock in the selected account
 
-```bash
-make setup     # uv sync, then .env from the example
-```
-
-Configuration is environment-driven. Set these values in `.env`:
+Configuration is environment-driven. `make setup` copies `.env.example` to `.env`; set these:
 
 | Variable | Purpose |
 |---|---|
